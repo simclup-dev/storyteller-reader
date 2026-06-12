@@ -2,7 +2,6 @@
 
 A synchronized audiobook reader: the text highlights **word by word, karaoke-style, in sync with the narration**. Built as an installable PWA (~9,600 lines of vanilla JavaScript across 20 modules) on top of a self-hosted [Storyteller](https://gitlab.com/storyteller-platform/storyteller) backend, which provides the audio-text alignment data.
 
-
 ## Features
 
 - **Karaoke mode** — word-level highlighting synchronized with audiobook narration
