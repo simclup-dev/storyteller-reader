@@ -1,6 +1,7 @@
 // ReadAlong State Management
 // Centralized state store for application data
 
+import { secureGet } from './secureStore.js';
 import { DEFAULT_FONT_SIZE, DEFAULT_READ_SIZE, DEFAULT_SPEED_IDX, DEFAULT_MODE, DEFAULT_THEME, DEFAULT_DENSITY, DEFAULT_RADIUS, DEFAULT_ANIM_DUR, STORAGE_KEYS, ACCENTS } from './constants.js';
 
 /**
@@ -198,7 +199,7 @@ export function getAudioElement() {
 /**
  * Load persisted settings from localStorage
  */
-export function loadPersistedState() {
+export async function loadPersistedState() {
   try {
     const savedFontSize = localStorage.getItem(STORAGE_KEYS.FONT_SIZE);
     if (savedFontSize) state.fontSize = parseInt(savedFontSize, 10);
@@ -235,7 +236,7 @@ export function loadPersistedState() {
      const savedProvider = localStorage.getItem(STORAGE_KEYS.API_PROVIDER);
     if (savedProvider) state.apiProvider = savedProvider;
 
-     const savedApiKey = localStorage.getItem(STORAGE_KEYS.API_KEY);
+     const savedApiKey = await secureGet(STORAGE_KEYS.API_KEY);
      if (savedApiKey) state.apiKey = savedApiKey;
 
      const savedFontFamily = localStorage.getItem(STORAGE_KEYS.FONT_FAMILY);

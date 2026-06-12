@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v16'; // BUMP THIS ON EACH DEPLOY
+const CACHE_VERSION = 'v17'; // BUMP THIS ON EACH DEPLOY
 const CACHE = 'readalong-' + CACHE_VERSION;
 const SHELL = ['/reader.html', '/manifest.json', '/icon.svg'];
 const OFFLINE_HTML = '<html><body style="background:#0f0e0d;color:#d4af37;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;font-family:sans-serif"><h1>📖</h1><p style="margin-top:1rem">Немає з\'єднання</p><p style="font-size:0.85rem;color:#9b8b74">Перевірте інтернет</p></body></html>';

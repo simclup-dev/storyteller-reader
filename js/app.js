@@ -1,6 +1,7 @@
 // ReadAlong App - Main Orchestrator
 // Coordinates all modules and manages global dependencies
 
+import { secureGet } from './secureStore.js';
 import { state, loadPersistedState, setAudioElement, saveBookProgress, resetBook } from './state.js';
 import { runVerifier } from './verifier-ui.js';
 import { authHdr, fetchWithRetry, initFetchInterceptor } from './http.js';
@@ -97,7 +98,7 @@ export async function init() {
   }, 150));
 
   // Load persisted settings
-  loadPersistedState();
+  await loadPersistedState();
 
   // Load reading time stats from localStorage
   try {
@@ -136,7 +137,7 @@ export async function init() {
   if (modeBtn) modeBtn.classList.add('active');
 
    // Initialize all modules
-   initAuth();
+   await initAuth();
    initSettings();
    initSpeedControl();
    initGestures();
@@ -157,7 +158,7 @@ export async function init() {
   buildSpeedSlider();
 
   // Check if already logged in
-  const savedToken = localStorage.getItem(STORAGE_KEYS.TOKEN);
+  const savedToken = await secureGet(STORAGE_KEYS.TOKEN);
   if (savedToken) {
     const savedServer = localStorage.getItem(STORAGE_KEYS.SERVER);
     if (savedServer && savedServer !== 'mock://demo') {

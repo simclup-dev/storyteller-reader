@@ -10,6 +10,7 @@ import {
   initFetchInterceptor
 } from './http.js';
 import { STORAGE_KEYS } from './constants.js';
+import { secureSet, secureGet } from './secureStore.js';
 import { getMockBooks, getMockManifest, createMockEpubZip, generateMockWav } from './mock.js';
 
 /**
@@ -62,8 +63,8 @@ export async function doDemoLogin() {
   state.apiProvider = 'deepseek';
 
   localStorage.setItem(STORAGE_KEYS.SERVER, state.server);
-  localStorage.setItem(STORAGE_KEYS.TOKEN, state.token);
-  localStorage.setItem(STORAGE_KEYS.API_KEY, state.apiKey);
+  await secureSet(STORAGE_KEYS.TOKEN, state.token);
+  await secureSet(STORAGE_KEYS.API_KEY, state.apiKey);
   localStorage.setItem(STORAGE_KEYS.API_PROVIDER, state.apiProvider);
 
   showToast('🎭 Демо-режим');
@@ -137,7 +138,7 @@ export function installPWA() {
 /**
  * Initialize authentication module
  */
-export function initAuth() {
+export async function initAuth() {
   // Initialize fetch interceptor (will be configured on login)
   // initFetchInterceptor will be called in doLogin
 
@@ -146,7 +147,7 @@ export function initAuth() {
 
   // Restore saved credentials (optional, auto-login not implemented for security)
   const savedServer = localStorage.getItem(STORAGE_KEYS.SERVER);
-  const savedKey = localStorage.getItem(STORAGE_KEYS.API_KEY);
+  const savedKey = await secureGet(STORAGE_KEYS.API_KEY);
   const savedProvider = localStorage.getItem(STORAGE_KEYS.API_PROVIDER);
 
   if (savedServer) {
@@ -163,7 +164,7 @@ export function initAuth() {
   }
 
   // Check for saved token and try to use it
-  const savedToken = localStorage.getItem(STORAGE_KEYS.TOKEN);
+  const savedToken = await secureGet(STORAGE_KEYS.TOKEN);
   if (savedToken && savedServer && savedServer !== 'mock://demo') {
     state.token = savedToken;
     // Could auto-load books here, but better ask user to click login

@@ -5,6 +5,7 @@ import { state } from './state.js';
 import { showToast, esc } from './utils.js';
 import { show } from './ui.js';
 import { STORAGE_KEYS } from './constants.js';
+import { secureSet } from './secureStore.js';
 import { getMockBooks, getMockManifest, createMockEpubZip, generateMockWav } from './mock.js';
 
 let _originalFetch = null;
@@ -111,10 +112,10 @@ export async function login(serverUrl, username, password, apiKey, apiProvider) 
 
     if (!state.token) throw new Error('Токен не отримано');
 
-    // Persist
+    // Persist (secrets encrypted at rest — see secureStore.js)
     localStorage.setItem(STORAGE_KEYS.SERVER, state.server);
-    localStorage.setItem(STORAGE_KEYS.TOKEN, state.token);
-    localStorage.setItem(STORAGE_KEYS.API_KEY, state.apiKey);
+    await secureSet(STORAGE_KEYS.TOKEN, state.token);
+    await secureSet(STORAGE_KEYS.API_KEY, state.apiKey);
     localStorage.setItem(STORAGE_KEYS.API_PROVIDER, state.apiProvider);
 
     initFetchInterceptor(state.server);

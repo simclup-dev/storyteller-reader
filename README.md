@@ -11,6 +11,7 @@ A synchronized audiobook reader: the text highlights **word by word, karaoke-sty
 - **One-tap translation** — tap any word or phrase while reading
 - **Offline-first PWA** — service worker caching; installable on phone and desktop
 - **Gesture controls** — swipe navigation, tap zones for play/pause and paging
+- **Encrypted credential storage** — the LLM API key and session token are AES-GCM encrypted at rest (WebCrypto, non-extractable master key in IndexedDB), never stored as plaintext
 - **Sleep timer**, per-book progress sync, configurable themes and typography
 - **Exact-arithmetic pagination** — column layout computed analytically instead of via `getClientRects()`, which returns per-word rects and breaks column measurement (hard-won lesson)
 
