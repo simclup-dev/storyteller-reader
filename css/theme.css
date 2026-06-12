@@ -1,0 +1,64 @@
+/* ============ FONT IMPORTS ============ */
+@import url('https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;1,7..72,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+/* ============ SHARED GEOMETRY + TYPOGRAPHY TOKENS ============ */
+body {
+  transition: background 0.4s ease, color 0.4s ease;
+  --ui: "Plus Jakarta Sans", system-ui, sans-serif;
+  --radius: 14px;
+  --read-size: 21px;
+  --line-h: 1.85;
+  --para-gap: 18px;
+  --col-gap: 60px;
+  --pad-x: 74px;
+}
+
+/* ============ DARK THEME — Dusk ============ */
+body[data-theme="dark"] {
+  --serif: "Lora", Georgia, serif;
+  --display: "Space Grotesk", system-ui, sans-serif;
+  --bg: #14121a;
+  --bg2: #1b1824;
+  --surface: #221e2c;
+  --surface2: #2a2533;
+  --ink: #ece8f2;
+  --sub: #9b94a8;
+  --faint: #6a6478;
+  --line: rgba(255, 255, 255, 0.08);
+  --line2: rgba(255, 255, 255, 0.13);
+  --accent: #f4a73f;
+  --accent-ink: #14121a;
+  --accent2: #e86a8a;
+  --glow: rgba(244, 167, 63, 0.42);
+  --glow-soft: rgba(244, 167, 63, 0.22);
+  --hl: rgba(244, 167, 63, 0.16);
+  --hl-edge: rgba(244, 167, 63, 0.28);
+  --cover-ink: #fff;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  --scrim: linear-gradient(90deg, rgba(20, 18, 26, 0.94) 38%, rgba(20, 18, 26, 0.18) 100%);
+}
+
+/* ============ LIGHT THEME — Atelier ============ */
+body[data-theme="light"] {
+  --serif: "Literata", Georgia, serif;
+  --display: "Newsreader", Georgia, serif;
+  --bg: #f4ede0;
+  --bg2: #efe6d6;
+  --surface: #fbf6ec;
+  --surface2: #f3ead9;
+  --ink: #2b2620;
+  --sub: #6b6053;
+  --faint: #9a8e7d;
+  --line: rgba(43, 38, 32, 0.12);
+  --line2: rgba(43, 38, 32, 0.2);
+  --accent: #9c3b2c;
+  --accent-ink: #f6efe2;
+  --accent2: #8a5a2c;
+  --glow: rgba(156, 59, 44, 0.18);
+  --glow-soft: rgba(156, 59, 44, 0.10);
+  --hl: #ecdcbe;
+  --hl-edge: #e6d2ab;
+  --cover-ink: #f6efe2;
+  --shadow: 0 12px 36px rgba(43, 38, 32, 0.18);
+  --scrim: linear-gradient(90deg, rgba(244, 237, 224, 0.96) 36%, rgba(244, 237, 224, 0.3) 100%);
+}

@@ -1,0 +1,13 @@
+{
+  "name": "ReadAlong",
+  "short_name": "ReadAlong",
+  "start_url": "/reader.html",
+  "display": "standalone",
+  "background_color": "#0f0e0d",
+  "theme_color": "#c8a96e",
+  "icons": [{
+    "src": "/icon.svg",
+    "sizes": "any",
+    "type": "image/svg+xml"
+  }]
+}
