@@ -77,21 +77,14 @@ export function initGestures() {
     e.preventDefault();
   });
 
-  // Double tap on text for immersive mode (reading mode only, skip sentences — handled by attachGestures)
-  let lastTap = 0;
-  document.addEventListener('touchend', (e) => {
-    if (e.target.closest('.bottom-panel, .overlay, input, select, button')) return;
-    if (state.mode !== 'reading') return;
-    if (e.target.closest('.text-sentence')) return; // sentences handled by attachGestures
+  // Immersive в читанні — ЛИШЕ через кнопку (data-action="toggle-immersive").
+  // Подвійний-тап прибрано: швидке гортання сторінок випадково вмикало immersive.
 
-    const currentTime = new Date().getTime();
-    const tapLength = currentTime - lastTap;
-
-    if (tapLength < 300 && tapLength > 0) {
-      // Double tap -> toggle immersive
-      toggleImmersive();
-    }
-    lastTap = currentTime;
+  // Запобігти нативному виділенню тексту (→ контекст-меню «Search Google») при
+  // тапах по UI/тексту. Виняток — справжні поля вводу.
+  document.getElementById('reader-screen')?.addEventListener('selectstart', (e) => {
+    if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    e.preventDefault();
   });
 }
 
@@ -226,22 +219,20 @@ export function attachGestures(container, selector, handlers = {}) {
 
 // ── Walking-mode gesture layer ────────────────────────────────────────────────
 
-const SWIPE_THRESHOLD = 60;
-const SWIPE_VELOCITY_MAX_MS = 500;
+const TAP_THRESHOLD = 10; // px — larger movement = scroll/pinch, not tap
 
 /**
  * Walking-mode gesture layer. Attaches to a full-screen container.
- * Handlers: { onPlayPause, onPrev, onNext, onTranslate, onDismiss, onBookmark, onPinch(scale) }
+ * Handlers: { onToggle, onPinch(scale) }
+ * - onToggle: tap anywhere (movement < TAP_THRESHOLD) — toggle play/pause + panel
+ * - onPinch:  two-finger pinch — font size
+ * All swipes and long-press bookmark are removed.
  */
 export function attachWalkingGestures(container, handlers = {}) {
-  let startX = 0, startY = 0, startTime = 0;
-  let pressTimer = null;
-  let pressFired = false;
+  let startX = 0, startY = 0;
   let initialPinchDist = 0;
   let lastPinchScale = 1;
   let pinchActive = false;
-
-  function clearPress() { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } }
 
   function onTouchStart(e) {
     if (e.touches.length === 2) {
@@ -250,17 +241,12 @@ export function attachWalkingGestures(container, handlers = {}) {
       const [a, b] = e.touches;
       initialPinchDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
       lastPinchScale = 1;
-      clearPress();
       return;
     }
+    pinchActive = false;
     const t = e.touches[0];
-    startX = t.clientX; startY = t.clientY; startTime = Date.now();
-    pressFired = false;
-    clearPress();
-    pressTimer = setTimeout(() => {
-      pressFired = true;
-      handlers.onBookmark?.();
-    }, 500);
+    startX = t.clientX;
+    startY = t.clientY;
   }
 
   function onTouchMove(e) {
@@ -275,12 +261,7 @@ export function attachWalkingGestures(container, handlers = {}) {
           handlers.onPinch?.(scale);
         }
       }
-      return;
     }
-    const t = e.touches[0];
-    const dx = Math.abs(t.clientX - startX);
-    const dy = Math.abs(t.clientY - startY);
-    if (dx > 10 || dy > 10) clearPress();
   }
 
   function onTouchEnd(e) {
@@ -290,48 +271,35 @@ export function attachWalkingGestures(container, handlers = {}) {
       lastPinchScale = 1;
       return;
     }
-    clearPress();
-    if (pressFired) return;
-
     const t = e.changedTouches[0];
-    const dx = t.clientX - startX;
-    const dy = t.clientY - startY;
-    const dt = Date.now() - startTime;
-    const absDx = Math.abs(dx), absDy = Math.abs(dy);
-
-    if ((absDx > SWIPE_THRESHOLD || absDy > SWIPE_THRESHOLD) && dt < SWIPE_VELOCITY_MAX_MS) {
-      if (absDx > absDy) {
-        if (dx < 0) handlers.onNext?.();
-        else handlers.onPrev?.();
-      } else {
-        if (dy < 0) handlers.onTranslate?.();
-        else handlers.onDismiss?.();
-      }
-      return;
-    }
-
-    if (absDx < 10 && absDy < 10) {
-      const r = container.getBoundingClientRect();
-      const cx = t.clientX - r.left;
-      const cy = t.clientY - r.top;
-      const inCenterX = cx > r.width * 0.2 && cx < r.width * 0.8;
-      const inCenterY = cy > r.height * 0.3 && cy < r.height * 0.7;
-      if (inCenterX && inCenterY) {
-        handlers.onPlayPause?.();
-      }
-      // Edge tap — walk-block onclick handles it
+    const absDx = Math.abs(t.clientX - startX);
+    const absDy = Math.abs(t.clientY - startY);
+    if (absDx < TAP_THRESHOLD && absDy < TAP_THRESHOLD) {
+      // Tap anywhere on the container — buttons must stopPropagation themselves.
+      // preventDefault глушить нативну tap-дію браузера (Touch-to-Search «Історія
+      // Google») та синтетичний click. Скидаємо будь-яке виділення про всяк випадок.
+      if (e.cancelable) e.preventDefault();
+      try { window.getSelection?.()?.removeAllRanges(); } catch (_) {}
+      handlers.onToggle?.();
     }
   }
 
   container.addEventListener('touchstart', onTouchStart, { passive: false });
   container.addEventListener('touchmove', onTouchMove, { passive: false });
-  container.addEventListener('touchend', onTouchEnd);
-  container.addEventListener('touchcancel', () => { clearPress(); pinchActive = false; });
+  container.addEventListener('touchend', onTouchEnd, { passive: false });
+  container.addEventListener('touchcancel', () => { pinchActive = false; });
+
+  // PC fallback: mouse click triggers toggle when no touch support
+  function onMouseClick(e) {
+    if (window.matchMedia('(pointer: coarse)').matches) return; // touch device — ignore
+    handlers.onToggle?.();
+  }
+  container.addEventListener('click', onMouseClick);
 
   return function detach() {
     container.removeEventListener('touchstart', onTouchStart);
     container.removeEventListener('touchmove', onTouchMove);
     container.removeEventListener('touchend', onTouchEnd);
-    clearPress();
+    container.removeEventListener('click', onMouseClick);
   };
 }

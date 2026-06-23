@@ -12,7 +12,7 @@ const state = {
   server: '',
   token: '',
   apiKey: '',
-  apiProvider: 'deepseek',
+  apiProvider: 'ollama',
   books: [],
   currentBook: null,
   bookId: null,
@@ -42,6 +42,8 @@ const state = {
   vocabulary: [],
   sleepTimer: null,
   sleepTimerEnd: null,
+  systemChime: 0,
+  chapterArt: 0,
   popupWord: '',
   blockNextSentenceTap: false,
   mockMode: false,
@@ -238,6 +240,13 @@ export async function loadPersistedState() {
 
      const savedApiKey = await secureGet(STORAGE_KEYS.API_KEY);
      if (savedApiKey) state.apiKey = savedApiKey;
+
+     // Migration: старі профілі на deepseek/claude без збереженого ключа
+     // переводимо на безкоштовний Ollama (ключ більше не потрібен).
+     if (!state.apiKey && (state.apiProvider === 'deepseek' || state.apiProvider === 'claude')) {
+       state.apiProvider = 'ollama';
+       localStorage.setItem(STORAGE_KEYS.API_PROVIDER, 'ollama');
+     }
 
      const savedFontFamily = localStorage.getItem(STORAGE_KEYS.FONT_FAMILY);
      if (savedFontFamily) {

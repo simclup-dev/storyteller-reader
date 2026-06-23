@@ -26,9 +26,12 @@ export async function doLogin() {
   btn.disabled = true;
   btn.textContent = 'Підключення...';
 
-  const serverUrl = document.getElementById('server-url')?.value?.replace(/\/$/, '') || '';
+  // Адреса сервера = поточний хост (reader і /api/ на тому самому origin через nginx).
+  // Поле прибрано з форми; беремо origin завжди, ігноруючи старі збережені IP.
+  const serverUrl = (document.getElementById('server-url')?.value?.replace(/\/$/, ''))
+    || window.location.origin;
   const apiKey = document.getElementById('api-key')?.value?.trim() || '';
-  const apiProvider = document.getElementById('api-provider')?.value || 'deepseek';
+  const apiProvider = document.getElementById('api-provider')?.value || 'ollama';
   const username = document.getElementById('username')?.value?.trim() || '';
   const password = document.getElementById('password')?.value || '';
 
@@ -60,7 +63,7 @@ export async function doDemoLogin() {
   state.server = 'mock://demo';
   state.token = 'mock-token-' + Date.now();
   state.apiKey = '';
-  state.apiProvider = 'deepseek';
+  state.apiProvider = 'ollama';
 
   localStorage.setItem(STORAGE_KEYS.SERVER, state.server);
   await secureSet(STORAGE_KEYS.TOKEN, state.token);

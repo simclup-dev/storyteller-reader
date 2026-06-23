@@ -11,9 +11,10 @@ import {
   getAudioUrl,
   getBookAssetFolder,
   saveProgressToServer,
-  loadProgressFromServer
+  loadProgressFromServer,
+  authHdr
 } from './http.js';
-import { cacheEpub, getCachedEpub, loadProgress } from './storage.js';
+import { cacheEpub, getCachedEpub, loadProgress, cacheAudio, getCachedAudio, clearBookCache, getCachedChapters } from './storage.js';
 import { parseEpub, parseSmil, matchEpubChaptersToAudio, invalidateEpubCacheIfNeeded } from './epub.js';
 import { loadAudioChapter, setActive, onTimeUpdate, onAudioPlay, onAudioPause } from './audio.js';
 import { renderChapters as renderChaptersPanel, updateBookmarkBtn, renderBookmarkDots } from './panels.js';
@@ -92,6 +93,10 @@ getBookAssetFolder(state.bookId).then(folder => {
 
   buildSpeedSlider();
   applyModeClass();
+  // Якщо книга відкривається ОДРАЗУ в walk — навісити тап-жести (play/pause).
+  // Раніше це робив лише setMode (перехід reading→walk), тож прямий старт у walk
+  // лишав текст без обробника тапа («тап нічого не робить»).
+  if (state.mode === 'walking') activateWalkingGestures();
 
   try {
     await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
@@ -191,6 +196,19 @@ export async function loadAudioManifest() {
 
     renderChapters();
 
+    // Звірити прапорець офлайн-завантаження з реальним кешем (точно: к-сть розділів
+    // з аудіо vs закешованих). Так книга, завантажена раніше (зокрема старим
+    // по-розділах способом), отримує ✓; а якщо кеш неповний/стертий — прапорець знімається.
+    try {
+      const cached = await getCachedChapters(state.bookId);
+      const need = state.epubChapters.filter(ec => ec.audioChapterIdx >= 0).length;
+      if (need > 0 && cached.length >= need) {
+        localStorage.setItem(`dl_${state.bookId}`, JSON.stringify({ total: need, at: Date.now() }));
+      } else {
+        localStorage.removeItem(`dl_${state.bookId}`);
+      }
+    } catch (_) {}
+
     const hasAudio = state.epubChapters.some(ec => ec.audioChapterIdx >= 0);
     if (!hasAudio) {
       const textContent = document.getElementById('text-content');
@@ -205,10 +223,90 @@ export async function loadAudioManifest() {
       const startIdx = firstMatchIdx >= 0 ? firstMatchIdx : 0;
       loadChapter(startIdx, false);
     }
+    // Проактивно проіндексувати System Log усіх минулих розділів у фоні,
+    // щоб лог і картка персонажа були готові ще до відкриття панелі.
+    window.indexSyslogBackground?.();
+    window.indexCharsBackground?.();
   } catch (e) {
     console.error('Audio manifest error:', e);
     loadChapter(0, false);
   }
+}
+
+// ── Офлайн-завантаження книги з бібліотеки (без відкриття) ──────────────────
+// Готує маніфест у state (без UI, без старту відтворення), потім кешує всі
+// аудіо-розділи. Аудіо кешується за epubChIdx — той самий ключ, що читає плеєр.
+const _JSZIP_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+
+async function _prepareBookData(bookId) {
+  await loadScript(_JSZIP_URL);
+  invalidateEpubCacheIfNeeded();
+  let blob = await getCachedEpub(bookId);
+  if (!blob) {
+    blob = await getEpubBlob(bookId);
+    await cacheEpub(bookId, blob);
+  }
+  state.bookId = bookId;          // parseEpub/matchEpubChaptersToAudio читають state
+  await parseEpub(blob);
+  const manifest = await getAudioManifest(bookId);
+  let offset = 0;
+  state.audioChapters = (manifest.readingOrder || []).map(item => {
+    const audioFile = item.href.split('/').pop().split('?')[0];
+    const ch = { href: item.href, audioFile, title: item.title || '', duration: item.duration || 0, startTime: offset };
+    offset += ch.duration;
+    return ch;
+  });
+  state.totalDuration = offset;
+  matchEpubChaptersToAudio();
+}
+
+/**
+ * Завантажити й закешувати всю книгу (текст уже в кеші після підготовки, далі —
+ * усі аудіо-розділи). onProgress(done, total) — для прогресу на кнопці.
+ * @returns {Promise<boolean>}
+ */
+export async function downloadBookOffline(bookId, onProgress) {
+  if (!bookId) return false;
+  state._dlInProgress = state._dlInProgress || {};
+  if (state._dlInProgress[bookId]) return false; // вже качається — не дублювати
+  state._dlInProgress[bookId] = true;
+  try {
+    await _prepareBookData(bookId);
+    // Знімок мапінгу epubChIdx→href — далі цикл НЕ читає глобальний state,
+    // тож відкриття іншої книги під час завантаження не зламає кешування.
+    const items = state.chapters.map(ch => {
+      const ec = state.epubChapters[ch.epubChapterIdx];
+      const ac = ec && ec.audioChapterIdx >= 0 ? state.audioChapters[ec.audioChapterIdx] : null;
+      const href = ac ? ((ec.primaryHref && ec.primaryHref !== ac.href) ? ec.primaryHref : ac.href) : null;
+      return { epubChIdx: ch.epubChapterIdx, href };
+    }).filter(x => x.href);
+
+    const total = items.length;
+    let done = 0;
+    onProgress?.(done, total);
+    for (const it of items) {
+      const cached = await getCachedAudio(bookId, it.epubChIdx);
+      if (!cached) {
+        try {
+          const res = await fetch(getAudioUrl(bookId, it.href), { headers: authHdr() });
+          if (res.ok) await cacheAudio(bookId, it.epubChIdx, await res.blob());
+        } catch (_) { /* пропустити розділ, не валити всю книгу */ }
+      }
+      done++;
+      onProgress?.(done, total);
+    }
+    try { localStorage.setItem(`dl_${bookId}`, JSON.stringify({ total, at: Date.now() })); } catch (_) {}
+    return true;
+  } finally {
+    delete state._dlInProgress[bookId];
+  }
+}
+
+/** Видалити офлайн-завантаження книги (текст + усе аудіо). */
+export async function deleteBookDownload(bookId) {
+  if (!bookId) return;
+  await clearBookCache(bookId);
+  try { localStorage.removeItem(`dl_${bookId}`); } catch (_) {}
 }
 
 /**
@@ -229,12 +327,15 @@ export async function tryRestoreProgress() {
     }
   }
 
-  const serverTime = await loadProgressFromServer(state.bookId);
+  const serverProgress = await loadProgressFromServer(state.bookId);
   let bestProgress = localProgress;
 
-  if (serverTime !== null && serverTime > 0) {
-    if (!bestProgress || serverTime > bestProgress.absTime) {
-      bestProgress = { absTime: serverTime, chapterIdx: -1, sentenceIdx: -1 };
+  if (serverProgress !== null && serverProgress.absTime > 0) {
+    const localTs = localProgress?.savedAt || 0;
+    const serverTs = serverProgress.timestamp || 0;
+    // Pick the freshest record by wall-clock; if no local record, always use server
+    if (!localProgress || serverTs > localTs) {
+      bestProgress = { absTime: serverProgress.absTime, chapterIdx: -1, sentenceIdx: -1 };
     }
   }
 
@@ -281,6 +382,20 @@ export function loadChapter(epubChIdx, autoplay = true, startAtOverride = undefi
   state._walkingBlocksBuilt = false;
   buildWalkingBlocks();
 
+  // Invalidate walk DOM cache — _walkPool entries are keyed by block index (0,1,2…)
+  // so they'd silently reuse previous chapter's DOM elements on the same indices.
+  _walkPool.clear();
+  if (_walkTrack) { _walkTrack.remove(); _walkTrack = null; }
+
+  // Атмосферний арт розділу: оновити фон + (за налаштуванням) заставку розділу.
+  try {
+    const chMeta = state.chapters.find(c => c.epubChapterIdx === epubChIdx);
+    window.updateChapterArt?.(epubChIdx, { title: chMeta?.label || '' });
+  } catch (_) {}
+
+  // System log: зібрати System-блоки для Листа Системи.
+  try { window.collectSystemBlocks?.(epubChIdx, state.sentences, state.walkingBlocks); } catch (_) {}
+
   document.getElementById('book-end-screen')?.classList.remove('show');
   const textContent = document.getElementById('text-content');
   if (textContent) {
@@ -321,15 +436,52 @@ export function loadChapter(epubChIdx, autoplay = true, startAtOverride = undefi
 }
 
 /**
- * Build walking blocks by grouping sentences into ~3-6s chunks
+ * Build walking blocks by grouping sentences into ~3-6s chunks.
+ * Detects dialogue (quote-balanced, per source sentence) and System text (bold EPUB markup).
  */
 function buildWalkingBlocks() {
-  // Detect dialogue: any sentence containing quote marks
+  // ── Pass 1: compute _isSystem and _isDialogue per source sentence ──────────
+  // Dialogue detection uses quote-parity tracking across DOM order to catch
+  // continuation lines that lack opening quotes (e.g. second paragraph of a reply).
+  // Only DOUBLE quotes mark speech. Single curly ’ is an apostrophe in English
+  // (it's, Carl's, don't) — counting it as a closing quote would corrupt the debt.
+  const OPEN_QUOTES  = /[“«„]/g;     // “ « „
+  const CLOSE_QUOTES = /[”»]/g;      // ” »
+  const ANY_QUOTE    = /[“”«»„"]/;   // incl. straight " for hasQuote (some EPUBs use it)
+  let openQuoteDebt = 0; // >0 means we are inside an unmatched open quote
+  let prevPara = null;   // paragraph key from elId (e.g. "id110-s61" → "id110")
+
   for (let si = 0; si < state.sentences.length; si++) {
-    const txt = state.sentences[si].text || '';
-    state.sentences[si]._isDialogue = /[\u201C\u201D«»]/.test(txt);
+    const s = state.sentences[si];
+    const txt = s.text || '';
+
+    // Reset quote-debt at real paragraph boundaries so one unbalanced quote can't
+    // leak "dialogue" onto the rest of the chapter. Only when the id scheme actually
+    // encodes a paragraph (…-s<N>); otherwise keep pure parity (don't reset).
+    const m = (s.elId || '').match(/^(.*)-s\d+$/);
+    if (m) {
+      if (m[1] !== prevPara) openQuoteDebt = 0;
+      prevPara = m[1];
+    }
+
+    // System: from EPUB DOM priming (epub.js sets _isSystem); default false
+    const isSys = !!s._isSystem;
+    s._isSystem = isSys;
+
+    if (isSys) {
+      s._isDialogue = false;
+      // System blocks don't carry quote debt (they're LitRPG status boxes, not speech)
+    } else {
+      const opens  = (txt.match(OPEN_QUOTES)  || []).length;
+      const closes = (txt.match(CLOSE_QUOTES) || []).length;
+      const hasQuote = ANY_QUOTE.test(txt);
+      const inDebt   = openQuoteDebt > 0;
+      s._isDialogue = hasQuote || inDebt;
+      openQuoteDebt = Math.max(0, openQuoteDebt + opens - closes);
+    }
   }
 
+  // ── Pass 2: group into blocks ──────────────────────────────────────────────
   const blocks = [];
   let i = 0;
   while (i < state.sentences.length) {
@@ -342,6 +494,9 @@ function buildWalkingBlocks() {
     if (firstDur < 4) {
       while (j < state.sentences.length) {
         const s = state.sentences[j];
+        // Не зливати System з не-System в один блок — інакше маска змішана і walk-картка
+        // (every system) не спрацьовує. Так System-вікно лишається цілісним блоком.
+        if (!!s._isSystem !== !!state.sentences[startIdx]._isSystem) break;
         const sDur = s.clipEnd - s.clipBegin;
         if (sDur <= 0) { j++; continue; }
         const nextDur = dur + sDur;
@@ -354,18 +509,24 @@ function buildWalkingBlocks() {
 
     const sentenceIndices = [];
     const dialogueMasks = [];
+    const systemMasks = [];
     for (let k = startIdx; k < j; k++) {
       sentenceIndices.push(k);
       const isDial = state.sentences[k]._isDialogue;
+      const isSys  = state.sentences[k]._isSystem;
       const wordCount = (state.sentences[k].text || '').split(/\s+/).filter(Boolean).length;
-      for (let w = 0; w < wordCount; w++) dialogueMasks.push(isDial);
+      for (let w = 0; w < wordCount; w++) {
+        dialogueMasks.push(isDial);
+        systemMasks.push(isSys);
+      }
     }
     blocks.push({
       sentences: sentenceIndices,
       clipBegin: state.sentences[startIdx].clipBegin,
       clipEnd: state.sentences[j - 1].clipEnd,
       text: combinedText,
-      dialogueMasks
+      dialogueMasks,
+      systemMasks
     });
     i = j;
   }
@@ -381,12 +542,14 @@ function buildWalkingBlocks() {
 let _walkTrack = null;
 let _walkPool  = new Map(); // blockIdx → DOM element
 
-const mkWordsMasked = (text, mask) => {
+const mkWordsMasked = (text, dialogueMask, systemMask) => {
   if (!text) return '';
   const words = text.split(/\s+/).filter(Boolean);
   return words.map((w, i) => {
-    const d = mask && mask[i] ? ' dialogue' : '';
-    return `<span class="word${d}">${esc(w)}</span>`;
+    // System takes priority over dialogue (LitRPG boxes may contain quoted names)
+    const cls = (systemMask && systemMask[i]) ? ' system'
+      : (dialogueMask && dialogueMask[i]) ? ' dialogue' : '';
+    return `<span class="word${cls}">${esc(w)}</span>`;
   }).join(' ');
 };
 
@@ -439,12 +602,19 @@ function _walkPopulate(blockIdx) {
       const blk = blocks[i];
       const el = document.createElement('div');
       el.className = 'walk-line';
-      el.innerHTML = mkWordsMasked(blk?.text, blk?.dialogueMasks);
+      // LitRPG: якщо весь блок — System, оформити рядок як картку статус-вікна.
+      if (blk?.systemMasks?.length && blk.systemMasks.every(Boolean)) {
+        el.classList.add('walk-system-block');
+      }
+      el.innerHTML = mkWordsMasked(blk?.text, blk?.dialogueMasks, blk?.systemMasks);
       _walkInsertSorted(el, i);
       _walkPool.set(i, el);
     }
     const el = _walkPool.get(i);
-    el.onclick = i !== blockIdx ? () => walkBlockTap(i) : null;
+    // Тап по тексту = ТІЛЬКИ play/pause (toggle на контейнері). Без переходу до речення:
+    // навігація по блоках — лише кнопками ⏮/⏭. Прибирає й конфлікт click↔toggle, що
+    // провокував нативний Touch-to-Search («Історія Google»).
+    el.onclick = null;
   }
 }
 
@@ -514,10 +684,13 @@ function processReadingHtml(ec) {
   if (!ec.readingHtml) return '';
   const doc = new DOMParser().parseFromString(ec.readingHtml, 'text/html');
 
-  // Ensure _isDialogue is set on every sentence (may be missing if buildWalkingBlocks not called)
+  // Ensure _isSystem and _isDialogue are set on every sentence.
+  // If buildWalkingBlocks has not run yet (e.g. first render before chapter load),
+  // use a best-effort fallback from text content only — quotes for dialogue, never System.
   for (const s of ec.sentences) {
+    if (s._isSystem === undefined) s._isSystem = false;
     if (s._isDialogue === undefined) {
-      s._isDialogue = /[\u201C\u201D«»]/.test(s.text || '');
+      s._isDialogue = !s._isSystem && /[“”«»]/.test(s.text || '');
     }
   }
 
@@ -529,8 +702,13 @@ function processReadingHtml(ec) {
     const el = doc.getElementById(s.elId);
     if (!el) continue;
     matchedCount++;
-    const d = s._isDialogue ? ' dialogue' : '';
-    el.innerHTML = `<span class="text-sentence${d}" id="s${i}" data-idx="${i}">${el.innerHTML}</span>`;
+    // System takes priority; dialogue only when not system
+    const cls = s._isSystem ? ' system' : (s._isDialogue ? ' dialogue' : '');
+    el.innerHTML = `<span class="text-sentence${cls}" id="s${i}" data-idx="${i}">${el.innerHTML}</span>`;
+    // LitRPG: System = повністю-жирний елемент (детектиться в epub.js) → оформити
+    // САМ елемент-абзац як картку статус-вікна (рамка/фон/моно). Інлайн-жирне сюди не
+    // потрапляє (там boldEl коротший за текст), тож крихітних боксів не буде.
+    if (s._isSystem) el.classList.add('system-block');
   }
   console.log(`processReadingHtml: ${matchedCount}/${ec.sentences.length} sentences matched via elId`);
 
@@ -563,7 +741,8 @@ function wrapWordsInSpan(root) {
         } else if (part.trim()) {
           hasWord = true;
           const span = document.createElement('span');
-          span.className = sen.classList.contains('dialogue') ? 'word dialogue' : 'word';
+          span.className = sen.classList.contains('system') ? 'word system'
+            : sen.classList.contains('dialogue') ? 'word dialogue' : 'word';
           span.textContent = part;
           frag.appendChild(span);
         }
@@ -614,6 +793,7 @@ export function renderText(scrollToTop = true, startBlockIdx) {
     c.appendChild(inner);
 
     const ec = state.epubChapters[state.currentChapterIdx];
+    // (Картку-заголовок прибрано: книга вже містить власний заголовок розділу → дублювалось.)
     if (ec?.readingHtml) {
       inner.innerHTML = processReadingHtml(ec);
     } else {
@@ -624,8 +804,8 @@ export function renderText(scrollToTop = true, startBlockIdx) {
         chunks.push(state.sentences.slice(i, i + PARA_SIZE).map((s, j) => {
           const idx = i + j;
           const words = s.text.split(/\s+/).filter(Boolean);
-          const d = s._isDialogue ? ' dialogue' : '';
-          return `<span class="text-sentence${d}" id="s${idx}" data-idx="${idx}">${words.map(w => `<span class="word${d}">${esc(w)}</span>`).join(' ')}</span>`;
+          const cls = s._isSystem ? ' system' : (s._isDialogue ? ' dialogue' : '');
+          return `<span class="text-sentence${cls}" id="s${idx}" data-idx="${idx}">${words.map(w => `<span class="word${cls}">${esc(w)}</span>`).join(' ')}</span>`;
         }).join(' '));
       }
       inner.innerHTML = chunks.map(p => `<p>${p}</p>`).join('');
@@ -871,23 +1051,11 @@ export function activateWalkingGestures() {
   const container = document.getElementById('text-content');
   if (!container) return;
 
+  // Tap anywhere on text area = toggle play/pause; panel visibility follows audio state.
+  window.walkToggle = () => { window.haptic?.(); window.togglePlay?.(); };
+
   _detachWalkingGestures = attachWalkingGestures(container, {
-    onPlayPause: () => window.togglePlay?.(),
-    onNext: () => {
-      const nextIdx = (state.activeBlockIdx ?? 0) + 1;
-      if (nextIdx < (state.walkingBlocks?.length || 0)) window.walkBlockTap?.(nextIdx);
-    },
-    onPrev: () => {
-      const prevIdx = (state.activeBlockIdx ?? 0) - 1;
-      if (prevIdx >= 0) window.walkBlockTap?.(prevIdx);
-    },
-    onTranslate: () => openTranslateForSentence(state.activeIdx >= 0 ? state.activeIdx : (state.walkingBlocks?.[state.activeBlockIdx]?.sentences?.[0] ?? 0)),
-    onDismiss: () => {
-      const anyOpen = document.querySelector('.bottom-panel.open');
-      if (anyOpen) { window.closeAllPanels?.(); return; }
-      window.setMode?.('reading');
-    },
-    onBookmark: () => _showWalkingBookmarkConfirm(state.activeBlockIdx),
+    onToggle: () => window.walkToggle?.(),
     onPinch: (scale) => {
       if (_pinchBaseFontSize == null) {
         _pinchBaseFontSize = parseFloat(
@@ -903,14 +1071,159 @@ export function activateWalkingGestures() {
 
   container.addEventListener('touchend', () => { _pinchBaseFontSize = null; }, { passive: true });
 
+  _initWalkControlsPanel();
+
   if (!state.walkingTutorialShown) {
     _showWalkingTutorial();
   }
 }
 
+/**
+ * Show or hide the walk-controls panel.
+ * When showing, recalculate `bottom` so the panel sits above the player-bar (progress strip).
+ * Called from audio.js via window.setWalkControlsVisible.
+ */
+window.setWalkControlsVisible = function setWalkControlsVisible(show) {
+  const panel = document.getElementById('walk-controls');
+  if (!panel) return;
+  if (show) {
+    const playerBar = document.getElementById('player-bar');
+    panel.style.bottom = (playerBar ? playerBar.offsetHeight : 0) + 'px';
+    panel.classList.add('visible');
+  } else {
+    panel.classList.remove('visible');
+    document.getElementById('walk-more-popover')?.classList.remove('open');
+  }
+};
+
+/**
+ * Перерахувати позицію walk-треку (центрування активного рядка) під поточний
+ * розмір #text-content. Кличеться з audio.js після ховання/повернення топбару,
+ * коли висота тексту змінюється.
+ */
+window.repositionWalkTrack = function repositionWalkTrack(instant) {
+  if (state.mode !== 'walking') return;
+  _walkLayout(state.activeBlockIdx ?? 0, !!instant);
+};
+
 export function deactivateWalkingGestures() {
   _detachWalkingGestures?.();
   _detachWalkingGestures = null;
+  // Hide panel when leaving walking mode
+  window.setWalkControlsVisible(false);
+}
+
+function _initWalkControlsPanel() {
+  // Wire up walk-controls buttons. Called each time walking mode is activated.
+  // Buttons use stopPropagation so they don't bubble up to the text-area toggle.
+  const panel = document.getElementById('walk-controls');
+  if (!panel || panel._walkCtrlInitDone) return;
+  panel._walkCtrlInitDone = true;
+
+  const stopAndCall = (fn) => (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    window.haptic?.();
+    fn(e);
+  };
+
+  // Prev block
+  document.getElementById('walk-btn-prev')?.addEventListener('click', stopAndCall(() => {
+    const prevIdx = Math.max(0, (state.activeBlockIdx ?? 0) - 1);
+    window.walkBlockTap?.(prevIdx);
+  }));
+
+  // Translate active phrase
+  document.getElementById('walk-btn-translate')?.addEventListener('click', stopAndCall(() => {
+    const sentIdx = state.activeIdx >= 0
+      ? state.activeIdx
+      : (state.walkingBlocks?.[state.activeBlockIdx]?.sentences?.[0] ?? 0);
+    openTranslateForSentence(sentIdx);
+  }));
+
+  // Next block
+  document.getElementById('walk-btn-next')?.addEventListener('click', stopAndCall(() => {
+    const nextIdx = Math.min(
+      (state.walkingBlocks?.length ?? 1) - 1,
+      (state.activeBlockIdx ?? 0) + 1
+    );
+    window.walkBlockTap?.(nextIdx);
+  }));
+
+  // ⏳ sleep timer — власний popover у walk-controls (той самий надійний механізм, що й more)
+  const timerBtn = document.getElementById('walk-btn-timer');
+  const timerPop = document.getElementById('walk-timer-popover');
+  timerBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    window.haptic?.();
+    popover?.classList.remove('open');     // не тримати обидва відкритими
+    timerPop?.classList.toggle('open');
+  });
+  timerPop?.querySelectorAll('[data-min]').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const v = opt.dataset.min;
+      window.setSleepTimer?.(v === 'chapter' ? v : parseInt(v, 10));
+      timerPop.classList.remove('open');
+    });
+  });
+
+  // ⋯ more button — toggle popover
+  const moreBtn = document.getElementById('walk-btn-more');
+  const popover = document.getElementById('walk-more-popover');
+  moreBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    window.haptic?.();
+    timerPop?.classList.remove('open');
+    popover?.classList.toggle('open');
+  });
+
+  // Close popovers when tapping outside. ⚠️ contains() (а не !==): тап потрапляє на
+  // внутрішній <span> кнопки, тож !==btn хибно закривав і bubble одразу відкривав назад.
+  document.addEventListener('click', (e) => {
+    if (popover?.classList.contains('open') && !popover.contains(e.target) && !moreBtn.contains(e.target)) {
+      popover.classList.remove('open');
+    }
+    if (timerPop?.classList.contains('open') && !timerPop.contains(e.target) && !timerBtn.contains(e.target)) {
+      timerPop.classList.remove('open');
+    }
+  }, true);
+
+  // Popover actions — all stop propagation, close popover, then act
+  const moreAction = (fn) => (e) => {
+    e.stopPropagation();
+    popover?.classList.remove('open');
+    fn();
+  };
+
+  document.getElementById('walk-more-chapters')?.addEventListener('click', moreAction(() => {
+    window.openChapters?.();
+  }));
+  document.getElementById('walk-more-bookmark')?.addEventListener('click', moreAction(() => {
+    _showWalkingBookmarkConfirm(state.activeBlockIdx ?? 0);
+  }));
+  document.getElementById('walk-more-treadmill')?.addEventListener('click', moreAction(() => {
+    const on = document.body.classList.toggle('treadmill-mode');
+    try { localStorage.setItem('st_treadmill', on ? '1' : '0'); } catch (_) {}
+    document.getElementById('walk-more-treadmill')?.classList.toggle('treadmill-on', on);
+    showToast(on ? '🏃 Доріжка-режим увімкнено' : 'Доріжка-режим вимкнено');
+    requestAnimationFrame(() => window.repositionWalkTrack?.(true));
+  }));
+  document.getElementById('walk-more-stats')?.addEventListener('click', moreAction(() => {
+    window.openStats?.();
+  }));
+  document.getElementById('walk-more-syslog')?.addEventListener('click', moreAction(() => {
+    window.openSystemLog?.();
+  }));
+  document.getElementById('walk-more-chars')?.addEventListener('click', moreAction(() => {
+    window.openChars?.();
+  }));
+  document.getElementById('walk-more-settings')?.addEventListener('click', moreAction(() => {
+    window.openSettings?.();
+  }));
+  document.getElementById('walk-more-reading')?.addEventListener('click', moreAction(() => {
+    window.setMode?.('reading');
+  }));
 }
 
 function _showWalkingBookmarkConfirm(blockIdx) {

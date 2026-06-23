@@ -1,7 +1,7 @@
 // ReadAlong UI Module
 // Handles screen transitions, panels, and UI state
 
-import { state } from './state.js';
+import { state, getAudioElement } from './state.js';
 import { showToast, debounce, esc, fmtTime } from './utils.js';
 
 /**
@@ -31,6 +31,12 @@ export function openPanel(panelId) {
   const overlay = document.getElementById('overlay');
   const panel = document.getElementById(panelId);
 
+  // Сховати walk-controls (z:50) поки відкрита панель — інакше його кнопки
+  // (⏮/⏭/таймер) лежать поверх панелі й перехоплюють тапи (керують фоном).
+  if (document.getElementById('walk-controls')?.classList.contains('visible')) {
+    window.setWalkControlsVisible?.(false);
+  }
+
   if (overlay) overlay.classList.add('show');
   if (panel) panel.classList.add('open');
 }
@@ -43,6 +49,13 @@ export function closeAllPanels() {
   if (overlay) overlay.classList.remove('show');
 
   document.querySelectorAll('.bottom-panel').forEach(p => p.classList.remove('open'));
+
+  // Повернути walk-controls, якщо ми у walk на паузі (єдине джерело істини —
+  // walk-controls видимі ⇔ walk + пауза + жодної відкритої панелі).
+  if (state.mode === 'walking') {
+    const audio = getAudioElement();
+    if (!audio || audio.paused) window.setWalkControlsVisible?.(true);
+  }
 
   // Hide word popup if exists
   hideWordPopup();
@@ -133,9 +146,11 @@ export function applyModeClass() {
   const readerScreen = document.getElementById('reader-screen');
   if (state.mode === 'walking') {
     readerScreen?.classList.add('walking-active');
+    readerScreen?.classList.remove('reading-focus');
     document.body.classList.add('walking-mode');
   } else {
     readerScreen?.classList.remove('walking-active');
+    readerScreen?.classList.remove('walk-immersive');
     document.body.classList.remove('walking-mode');
   }
   document.body.classList.toggle('light-mode', state.theme === 'sepia');

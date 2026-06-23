@@ -220,22 +220,36 @@ export function getAudioUrl(bookId, href) {
 /**
  * Save progress to server
  * @param {string} bookId
- * @param {number} absTime
- * @returns {Promise<boolean>}
+ * @param {number} absTime - absolute playback position (seconds)
+ * @param {number} totalDuration - total book duration (seconds), for totalProgression
+ * @param {string} [hrefOpt] - current audio chapter href (optional)
+ * @returns {Promise<boolean|'conflict'>} true on success, 'conflict' if server has newer, false on error
  */
-export async function saveProgressToServer(bookId, absTime) {
+export async function saveProgressToServer(bookId, absTime, totalDuration, hrefOpt) {
   if (state.mockMode) return true;
   if (!state.token) return false;
   try {
-    const res = await fetch(`${state.server}/api/v2/books/${bookId}/progress`, {
-      method: 'PUT',
+    const locator = {
+      href: hrefOpt || '',
+      type: 'audio/mpeg',
+      locations: {
+        totalProgression: totalDuration > 0 ? Math.min(1, absTime / totalDuration) : 0,
+        fragments: [`t=${absTime}`],
+        position: absTime
+      }
+    };
+    const res = await fetch(`${state.server}/api/v2/books/${bookId}/positions`, {
+      method: 'POST',
       headers: authHdr(),
-      body: JSON.stringify({ time: absTime })
+      body: JSON.stringify({ locator, timestamp: Date.now() })
     });
-    if (res.status === 404) return false;
-    return res.ok;
+    if (res.status === 204) return true;
+    if (res.status === 409) return 'conflict';
+    const txt = await res.text().catch(() => '');
+    console.warn(`saveProgressToServer: HTTP ${res.status}`, txt.slice(0, 120));
+    return false;
   } catch (e) {
-    console.warn('Save progress error:', e);
+    console.warn('saveProgressToServer error:', e);
     return false;
   }
 }
@@ -243,20 +257,39 @@ export async function saveProgressToServer(bookId, absTime) {
 /**
  * Load progress from server
  * @param {string} bookId
- * @returns {Promise<number|null>}
+ * @returns {Promise<{absTime: number, timestamp: number}|null>}
  */
 export async function loadProgressFromServer(bookId) {
   if (state.mockMode) return null;
   if (!state.token) return null;
   try {
-    const res = await fetch(`${state.server}/api/v2/books/${bookId}/progress`, { headers: authHdr() });
+    const res = await fetch(`${state.server}/api/v2/books/${bookId}/positions`, { headers: authHdr() });
     if (res.status === 404) return null;
     if (res.ok) {
       const data = await res.json();
-      return data.time || data.absTime || null;
+      let locator = data.locator;
+      if (typeof locator === 'string') {
+        try { locator = JSON.parse(locator); } catch (_) { locator = null; }
+      }
+      let absTime = null;
+      if (locator?.locations?.position != null) {
+        absTime = locator.locations.position;
+      } else if (locator?.locations?.fragments?.length) {
+        const frag = locator.locations.fragments.find(f => typeof f === 'string' && f.startsWith('t='));
+        if (frag) absTime = parseFloat(frag.slice(2));
+      }
+      if (absTime == null && locator?.locations?.totalProgression != null && state.totalDuration > 0) {
+        absTime = locator.locations.totalProgression * state.totalDuration;
+      }
+      if (absTime == null || isNaN(absTime)) return null;
+      const totalProgression = (locator?.locations?.totalProgression != null)
+        ? locator.locations.totalProgression : null;
+      return { absTime, totalProgression, timestamp: data.timestamp || 0 };
     }
+    const txt = await res.text().catch(() => '');
+    console.warn(`loadProgressFromServer: HTTP ${res.status}`, txt.slice(0, 120));
   } catch (e) {
-    console.warn('Load progress error:', e);
+    console.warn('loadProgressFromServer error:', e);
   }
   return null;
 }

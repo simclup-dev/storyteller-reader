@@ -2,7 +2,7 @@
 // This file contains all configuration constants
 
 export const SPEEDS = [0.75, 0.80, 0.85, 0.90, 0.95, 1.0, 1.1, 1.25, 1.5, 2.0];
-export const EPUB_CACHE_VERSION = 9;
+export const EPUB_CACHE_VERSION = 10;
 
 // Default settings
 export const DEFAULT_FONT_SIZE = 21;
@@ -10,7 +10,12 @@ export const DEFAULT_READ_SIZE = 21;
 export const DEFAULT_SPEED_IDX = 5;
 export const DEFAULT_MODE = 'reading';
 export const DEFAULT_THEME = 'dark';
-export const DEFAULT_API_PROVIDER = 'deepseek';
+export const DEFAULT_API_PROVIDER = 'ollama';
+
+// Ollama Cloud (через серверний nginx-проксі /ollama/ — ключ підставляє nginx,
+// у клієнт/браузер він не потрапляє). Щоб змінити модель — правити лише тут.
+export const OLLAMA_ENDPOINT = '/ollama/v1/chat/completions';
+export const OLLAMA_MODEL = 'gemma4:31b-cloud';
 export const DEFAULT_DENSITY = 'regular';
 export const DEFAULT_RADIUS = 14;
 export const DEFAULT_ANIM_DUR = 560;

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v17'; // BUMP THIS ON EACH DEPLOY
+const CACHE_VERSION = 'v69'; // BUMP THIS ON EACH DEPLOY
 const CACHE = 'readalong-' + CACHE_VERSION;
 const SHELL = ['/reader.html', '/manifest.json', '/icon.svg'];
 const OFFLINE_HTML = '<html><body style="background:#0f0e0d;color:#d4af37;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;font-family:sans-serif"><h1>📖</h1><p style="margin-top:1rem">Немає з\'єднання</p><p style="font-size:0.85rem;color:#9b8b74">Перевірте інтернет</p></body></html>';
@@ -22,7 +22,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  if (url.includes('/api/')) {
+  if (url.includes('/api/') || url.includes('/ollama/')) {
     e.respondWith(
       fetch(e.request).catch(() =>
         new Response(JSON.stringify({ error: 'offline' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
@@ -43,8 +43,13 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Network-first for JS modules — деплой завжди тягне свіжі модулі, кеш = офлайн-фолбек
-  if (e.request.destination === 'script') {
+  // Network-first for JS/CSS — деплой завжди тягне свіжі модулі, кеш = офлайн-фолбек.
+  // Вирішуємо за РОЗШИРЕННЯМ URL, а не за e.request.destination: браузери ненадійно
+  // ставлять destination='script' для ES-module суб-імпортів (через що старі модулі
+  // лишались закешованими і ламали оновлення). Розширення — детерміноване.
+  const _path = new URL(url).pathname;
+  if (e.request.destination === 'script' || e.request.destination === 'style' ||
+      /\.(js|mjs|css)$/.test(_path)) {
     e.respondWith(
       fetch(e.request).then(res => {
         const copy = res.ok ? res.clone() : null;   // клон СИНХРОННО, до return

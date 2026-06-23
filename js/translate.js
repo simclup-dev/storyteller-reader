@@ -6,6 +6,12 @@ import { showToast, esc, debounce } from './utils.js';
 import { fetchWithRetry } from './http.js';
 import { openPanel, closeAllPanels } from './ui.js';
 import { setActive } from './audio.js';
+import { OLLAMA_ENDPOINT, OLLAMA_MODEL } from './constants.js';
+
+/** Чи потрібен користувацький API-ключ для поточного провайдера. Ollama проксіюється сервером. */
+function needsApiKey() {
+  return state.apiProvider !== 'ollama';
+}
 
 let _popupWord = '';
 
@@ -54,7 +60,7 @@ export function openTranslate(idxOverride) {
 
   openPanel('translate-panel');
 
-  if (state.apiKey) {
+  if (!needsApiKey() || state.apiKey) {
     translateSentence(idx);
   } else {
     showToast('⚠️ Встановіть API ключ у налаштуваннях');
@@ -75,7 +81,7 @@ export function selectTransSentence(idx) {
 
   state.selectedTranslateIdx = idx;
 
-  if (state.apiKey) {
+  if (!needsApiKey() || state.apiKey) {
     translateSentence(idx);
   }
 }
@@ -110,7 +116,9 @@ export async function translateSentence(idx) {
 
   try {
     let reply = '';
-    if (state.apiProvider === 'deepseek') {
+    if (state.apiProvider === 'ollama') {
+      reply = await callOllama(systemPrompt, userPrompt);
+    } else if (state.apiProvider === 'deepseek') {
       reply = await callDeepSeek(systemPrompt, userPrompt);
     } else {
       reply = await callClaude(systemPrompt, userPrompt);
@@ -160,6 +168,33 @@ export async function translateSentence(idx) {
     if (resumeBtn) resumeBtn.classList.remove('hidden');
     showToast('Помилка перекладу', 'error');
   }
+}
+
+/**
+ * Call Ollama Cloud (gemma3:27b) через серверний nginx-проксі /ollama/.
+ * Ключ підставляє nginx — у клієнті жодного ключа немає.
+ * @private
+ */
+export async function callOllama(systemPrompt, userPrompt) {
+  const res = await fetchWithRetry(OLLAMA_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: OLLAMA_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      max_tokens: 300,
+      temperature: 0.3,
+      stream: false
+    })
+  });
+
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
 }
 
 /**

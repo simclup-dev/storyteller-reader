@@ -15,7 +15,62 @@ function hexA(hex, a) {
 /**
  * Initialize settings from localStorage
  */
+/**
+ * Перетворити .cslider-діви на робочі повзунки з властивістю `.value` та подією `input`,
+ * щоб усе наявне дротування (slider.value=…, slider.oninput=…, inline oninput) працювало
+ * БЕЗ змін. Кастомні діви композитяться дешево → панель Налаштувань їде плавно
+ * (нативні <input type=range> тримали головний потік під час слайду).
+ */
+function initCustomSliders() {
+  document.querySelectorAll('.cslider').forEach(el => {
+    if (el._csInit) return;
+    el._csInit = true;
+    const min = parseFloat(el.dataset.min);
+    const max = parseFloat(el.dataset.max);
+    const step = parseFloat(el.dataset.step) || 1;
+    const dec = (String(el.dataset.step).split('.')[1] || '').length; // десяткові кроку
+    const fill = el.querySelector('.cslider-fill');
+    const thumb = el.querySelector('.cslider-thumb');
+    const clamp = (v) => {
+      if (isNaN(v)) v = min;
+      v = min + Math.round((v - min) / step) * step;
+      v = Math.max(min, Math.min(max, v));
+      return parseFloat(v.toFixed(dec));   // без float-шуму (0.150000002 → 0.15)
+    };
+    let val = clamp(parseFloat(el.dataset.value));
+    const render = () => {
+      const pct = max > min ? (val - min) / (max - min) : 0;
+      if (fill) fill.style.width = (pct * 100) + '%';
+      if (thumb) thumb.style.left = (pct * 100) + '%';
+    };
+    Object.defineProperty(el, 'value', {
+      configurable: true,
+      get() { return String(val); },
+      set(v) { val = clamp(parseFloat(v)); render(); }
+    });
+    const setFromX = (clientX) => {
+      const r = el.getBoundingClientRect();
+      const pct = r.width > 0 ? Math.max(0, Math.min(1, (clientX - r.left) / r.width)) : 0;
+      val = clamp(min + pct * (max - min));
+      render();
+      el.dispatchEvent(new Event('input'));
+    };
+    let dragging = false;
+    el.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      setFromX(e.clientX); e.preventDefault();
+    });
+    el.addEventListener('pointermove', (e) => { if (dragging) setFromX(e.clientX); });
+    const end = () => { dragging = false; };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    render();
+  });
+}
+
 export function initSettings() {
+  initCustomSliders();
   applySavedTheme();
   applySavedAccentColor();
   applySavedFontFamily();
@@ -432,8 +487,10 @@ export function importAllData() {
 export function setDialogueColor(color) {
   localStorage.setItem('st_dialogue_color', color);
   document.documentElement.style.setProperty('--dialogue-color', color);
-  document.querySelectorAll('#dc-warm, #dc-blue').forEach(b => {
-    b.classList.toggle('active', b.dataset.color === color);
+  document.querySelectorAll('#dc-warm, #dc-blue, #dc-rose').forEach(b => {
+    const active = b.dataset.color === color;
+    b.classList.toggle('active', active);
+    b.style.borderColor = active ? 'var(--accent)' : 'transparent';
   });
 }
 
@@ -441,9 +498,32 @@ export function setDialogueIntensity(val) {
   val = parseInt(val);
   localStorage.setItem('st_dialogue_intensity', val);
   document.documentElement.style.setProperty('--dialogue-font-style', val >= 2 ? 'italic' : 'normal');
-  document.documentElement.style.setProperty('--dialogue-text-shadow', val >= 3 ? '0 0 8px var(--dialogue-color)' : 'none');
+  document.documentElement.style.setProperty('--dialogue-text-shadow', val >= 3 ? '0 0 10px var(--dialogue-color)' : 'none');
   const label = document.getElementById('dialogue-intensity-label');
   if (label) label.textContent = val;
+  const slider = document.getElementById('dialogue-intensity');
+  if (slider) slider.value = val;
+}
+
+export function setSystemColor(color) {
+  localStorage.setItem('st_system_color', color);
+  document.documentElement.style.setProperty('--system-color', color);
+  document.querySelectorAll('#sc-amber, #sc-cyan, #sc-green').forEach(b => {
+    const active = b.dataset.color === color;
+    b.classList.toggle('active', active);
+    b.style.borderColor = active ? 'var(--accent)' : 'transparent';
+  });
+}
+
+export function setSystemIntensity(val) {
+  val = parseInt(val);
+  localStorage.setItem('st_system_intensity', val);
+  document.documentElement.style.setProperty('--system-font-style', val >= 2 ? 'italic' : 'normal');
+  document.documentElement.style.setProperty('--system-text-shadow', val >= 3 ? '0 0 10px var(--system-color)' : 'none');
+  const label = document.getElementById('system-intensity-label');
+  if (label) label.textContent = val;
+  const slider = document.getElementById('system-intensity');
+  if (slider) slider.value = val;
 }
 
 export function refreshCacheDisplay() {
@@ -591,4 +671,53 @@ export function initNewControls() {
   const savedDepth = parseInt(localStorage.getItem('walk_ctx_depth')) || 2;
   state._walkCtxDepth = savedDepth;
   _syncSeg('depth-seg', String(savedDepth));
+
+  // System-сповіщення (звук «дзинь»)
+  const chime = parseInt(localStorage.getItem('st_system_chime')) || 0;
+  state.systemChime = chime;
+  _syncSeg('system-chime-seg', String(chime));
+
+  // Арт розділу
+  const art = parseInt(localStorage.getItem('st_chapter_art')) || 0;
+  state.chapterArt = art;
+  document.body.classList.toggle('chapter-art-on', art > 0);
+  _syncSeg('chapter-art-seg', String(art));
+
+  // Art opacity
+  const storedArtOpacity = localStorage.getItem('st_art_opacity');
+  const artOpacity = storedArtOpacity !== null ? parseFloat(storedArtOpacity) : 0.6;
+  document.documentElement.style.setProperty('--chapter-art-opacity', artOpacity);
+  const artOpacityDisplay = document.getElementById('art-opacity-display');
+  if (artOpacityDisplay) artOpacityDisplay.textContent = Math.round(artOpacity * 100) + '%';
+  const artOpacitySlider = document.getElementById('art-opacity-slider');
+  if (artOpacitySlider) {
+    artOpacitySlider.value = artOpacity;
+    artOpacitySlider.oninput = (e) => {
+      const v = parseFloat(e.target.value);
+      document.documentElement.style.setProperty('--chapter-art-opacity', v);
+      if (artOpacityDisplay) artOpacityDisplay.textContent = Math.round(v * 100) + '%';
+      try { localStorage.setItem('st_art_opacity', String(v)); } catch (_) {}
+    };
+  }
+
+  // Art blur
+  const storedArtBlur = localStorage.getItem('st_art_blur');
+  const artBlur = storedArtBlur !== null ? parseFloat(storedArtBlur) : 5;
+  document.documentElement.style.setProperty('--chapter-art-blur', artBlur + 'px');
+  const artBlurDisplay = document.getElementById('art-blur-display');
+  if (artBlurDisplay) artBlurDisplay.textContent = artBlur + 'px';
+  const artBlurSlider = document.getElementById('art-blur-slider');
+  if (artBlurSlider) {
+    artBlurSlider.value = artBlur;
+    artBlurSlider.oninput = (e) => {
+      const v = parseFloat(e.target.value);
+      document.documentElement.style.setProperty('--chapter-art-blur', v + 'px');
+      if (artBlurDisplay) artBlurDisplay.textContent = v + 'px';
+      try { localStorage.setItem('st_art_blur', String(v)); } catch (_) {}
+    };
+  }
+
+  // Art prefetch
+  const artPrefetch = localStorage.getItem('st_art_prefetch') !== '0';
+  _syncSeg('art-prefetch-seg', artPrefetch ? '1' : '0');
 }

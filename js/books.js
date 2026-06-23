@@ -4,7 +4,8 @@
 import { state } from './state.js';
 import { getBookProgress, saveBookProgress } from './state.js';
 import { showToast, esc, fmtTime } from './utils.js';
-import { loadBooks as apiLoadBooks, getBookCoverUrl } from './http.js';
+import { loadBooks as apiLoadBooks, getBookCoverUrl, loadProgressFromServer, getAudioManifest } from './http.js';
+import { getCachedChapters } from './storage.js';
 import { show } from './ui.js';
 import { STORAGE_KEYS, SPEEDS } from './constants.js';
 
@@ -79,9 +80,13 @@ export function setSort(sort) {
 function getBookMeta(b) {
   const id = b.uuid || b.id;
   const prog = id ? getBookProgress(id) : null;
-  const pct = prog && prog.totalDuration > 0
-    ? Math.min(100, Math.round((prog.absTime / prog.totalDuration) * 100))
-    : (prog ? 1 : 0);
+  const pct = prog
+    ? (prog.totalProgression != null
+        ? Math.min(100, Math.round(prog.totalProgression * 100))
+        : (prog.totalDuration > 0
+            ? Math.min(100, Math.round((prog.absTime / prog.totalDuration) * 100))
+            : 1))
+    : 0;
   const lastOpen = parseInt(localStorage.getItem(`lastopen_${id}`)) || 0;
   const isFinished = prog && pct >= 95;
   const isReading = prog && prog.absTime > 5 && !isFinished;
@@ -90,6 +95,36 @@ function getBookMeta(b) {
     ? state.audioChapters.reduce((s, a) => s + (a.duration || 0), 0)
     : 0);
   return { id, prog, pct, lastOpen, isFinished, isReading, isNew, duration };
+}
+
+// Бібліотека малює прогрес із localStorage. На іншому пристрої (напр. ПК, що
+// давно не відкривався) це застаріло → картка показує стару позицію, хоча при
+// відкритті книги tryRestoreProgress підтягує свіжу з сервера. Тому після
+// завантаження списку звіряємо кожну книгу з сервером і оновлюємо локальний кеш,
+// якщо серверний запис новіший. Потім перемальовуємо.
+export async function syncLibraryProgress() {
+  if (!state.books?.length || state.mockMode || !state.token) return;
+  let changed = false;
+  await Promise.all(state.books.map(async (b) => {
+    const id = b.uuid || b.id;
+    if (!id) return;
+    let sp = null;
+    try { sp = await loadProgressFromServer(id); } catch (_) { return; }
+    if (!sp || !(sp.absTime > 0)) return;
+    const local = getBookProgress(id);
+    const localTs = local?.savedAt || 0;
+    if (local && localTs >= (sp.timestamp || 0)) return; // локальний свіжіший — лишити
+    saveBookProgress(id, {
+      absTime: sp.absTime,
+      chapterIdx: local?.chapterIdx ?? -1,
+      sentenceIdx: -1,
+      totalDuration: local?.totalDuration || b.totalDuration || 0,
+      totalProgression: sp.totalProgression,
+      savedAt: sp.timestamp || Date.now()
+    });
+    changed = true;
+  }));
+  if (changed) renderBooks();
 }
 
 export function renderBooks() {
@@ -278,6 +313,37 @@ function renderHero(entry) {
     </div>`;
 }
 
+// Пасивно позначити ✓ книги, що вже закешовані (зокрема завантажені раніше, до
+// появи прапорця dl_). Дешево: маніфест тягнемо ЛИШЕ для книг, які мають кеш і ще
+// не позначені. Точне звіряння (з можливим зняттям ✓) робиться при відкритті книги.
+export async function reconcileDownloadBadges() {
+  if (!state.books?.length) return;
+  await Promise.all(state.books.map(async (b) => {
+    const id = b.uuid || b.id;
+    if (!id || localStorage.getItem(`dl_${id}`)) return;
+    let cached;
+    try { cached = await getCachedChapters(id); } catch (_) { return; }
+    if (!cached || !cached.length) return;
+    let manifest;
+    try { manifest = await getAudioManifest(id); } catch (_) { return; }
+    const audioCount = (manifest?.readingOrder || []).length;
+    if (audioCount > 0 && cached.length >= audioCount) {
+      try { localStorage.setItem(`dl_${id}`, JSON.stringify({ total: cached.length, at: Date.now() })); } catch (_) {}
+      document.querySelectorAll(`[data-action="download-book"][data-id="${id}"]`).forEach(el => {
+        el.classList.add('dl-done'); el.classList.remove('dl-busy'); el.textContent = '✓';
+      });
+    }
+  }));
+}
+
+// Кутова кнопка офлайн-завантаження книги. Стан «завантажено» тримаємо у
+// localStorage (dl_<id>), щоб малювати без асинхронного сканування IndexedDB.
+function dlBadge(id) {
+  if (!id) return '';
+  const done = !!localStorage.getItem(`dl_${id}`);
+  return `<span class="dl-badge${done ? ' dl-done' : ''}" data-action="download-book" data-id="${esc(id)}" title="${done ? 'Завантажено — торкнись щоб видалити' : 'Завантажити для офлайн'}">${done ? '✓' : '⬇'}</span>`;
+}
+
 function renderLibCard(b, origIdx, meta) {
   const title = esc(b.title || b.name || '');
   const pct = meta.pct || 0;
@@ -288,7 +354,10 @@ function renderLibCard(b, origIdx, meta) {
       <div class="lib-card-track">
         ${pct > 0 ? `<div class="lib-card-fill" style="width:${pct}%"></div>` : ''}
       </div>
-      <div class="lib-card-pct">${pct > 0 ? pct + '%' : 'Не почато'}</div>
+      <div class="lib-card-bottom">
+        <div class="lib-card-pct">${pct > 0 ? pct + '%' : 'Не почато'}</div>
+        ${dlBadge(meta.id)}
+      </div>
     </div>`;
 }
 
@@ -315,7 +384,10 @@ function renderShelf(name, entries, allowCollapse = false) {
           ${isNew ? '<span class="shelf-badge">Нова</span>' : ''}
           ${meta.pct > 0 ? `<div class="shelf-progress"><div style="width:${meta.pct}%"></div></div>` : ''}
         </div>
-        <div class="shelf-card-title">${esc(b.title || b.name || '')}</div>
+        <div class="shelf-card-footer">
+          <div class="shelf-card-title">${esc(b.title || b.name || '')}</div>
+          ${dlBadge(meta.id)}
+        </div>
         ${authorLine}
       </div>`;
   }).join('');
@@ -416,6 +488,7 @@ export function renderBookCard(b, origIdx, meta) {
           : '📖'
         }
         ${badge}
+        ${dlBadge(meta.id)}
       </div>
       <div class="book-body">
         <div class="book-title" title="${esc(title)}">${esc(title)}</div>

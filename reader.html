@@ -135,6 +135,7 @@ body {
               radial-gradient(ellipse at 50% 100%, var(--accent-glow) 0%, transparent 60%),
               var(--bg);
 }
+.login-inner { display: flex; flex-direction: column; align-items: center; width: 100%; }
 .logo { font-family: var(--font-reading); font-size: 2.8rem; color: var(--accent); margin-bottom: 0.1rem; letter-spacing: -0.02em; transition: color var(--transition-smooth); }
 .logo-sub { font-size: 0.7rem; color: var(--text-muted); letter-spacing: 0.18em; text-transform: uppercase; margin-bottom: 2.5rem; }
 
@@ -401,6 +402,27 @@ input::placeholder { color: var(--text-dim); }
 .badge-done { background:rgba(0,0,0,0.6); color:#10b981; }
 .badge-reading { background:var(--accent); color:var(--accent-ink, #0f0e0d); }
 
+/* Кнопка офлайн-завантаження книги */
+.dl-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5rem; height: 1.5rem;
+  border-radius: 0.3rem; line-height: 1; cursor: pointer;
+  font-size: 0.8rem; font-weight: 700; flex-shrink: 0;
+  background: var(--surface3, rgba(255,255,255,0.08));
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  transition: transform 0.1s;
+}
+.dl-badge:active { transform: scale(0.88); }
+.dl-badge.dl-done { background: rgba(16,185,129,0.15); color: #10b981; border-color: rgba(16,185,129,0.4); }
+.dl-badge.dl-busy { background: var(--accent); color: var(--accent-ink, #0f0e0d); font-size: 0.62rem; border-color: transparent; }
+
+/* lib-card bottom row: progress % + dl button side by side */
+.lib-card-bottom {
+  display: flex; align-items: center; justify-content: space-between; margin-top: 5px;
+}
+
 /* Common book-cover */
 .book-cover {
   background: var(--surface2); flex-shrink: 0;
@@ -413,6 +435,61 @@ input::placeholder { color: var(--text-dim); }
 /* READER */
 #reader-screen { position: relative; height: 100vh; overflow: hidden; }
 
+/* ── Атмосферний арт розділу ── */
+#chapter-art-bg {
+  position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background-size: cover; background-position: center;
+  filter: blur(var(--chapter-art-blur, 5px)) saturate(1.08) brightness(0.95);
+  transform: scale(1.05);                 /* ховаємо краї блюру */
+  opacity: 0; transition: opacity 1.2s ease;
+}
+/* Легкий скрим лише знизу — щоб текст лишався читабельним, але арт було видно */
+#chapter-art-bg::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.32));
+}
+body.chapter-art-on #chapter-art-bg.has-art { opacity: var(--chapter-art-opacity, 0.6); }
+/* У прогулянці текст вузький і по центру — фон може бути присутнішим */
+body.chapter-art-on #reader-screen.walking-active #chapter-art-bg.has-art { opacity: calc(min(1, var(--chapter-art-opacity, 0.6) + 0.15)); }
+/* Деталі арту показуємо тільки коли арт увімкнено */
+body:not(.chapter-art-on) .art-detail-row { display: none; }
+
+#chapter-art-splash {
+  position: absolute; inset: 0; z-index: 6; pointer-events: none;
+  display: flex; align-items: center; justify-content: center; flex-direction: column;
+  background: rgba(0,0,0,0.62); opacity: 0; transition: opacity 0.5s ease;
+}
+#chapter-art-splash.show { opacity: 1; }
+#chapter-art-splash img {
+  width: min(92%, 1200px); max-height: 76%; object-fit: contain;
+  border-radius: 16px; box-shadow: 0 20px 70px rgba(0,0,0,0.65);
+}
+#chapter-art-splash .splash-title {
+  margin-top: 1.2rem; font-family: var(--font-ui); font-size: 1.3rem;
+  font-weight: 600; color: #fff; letter-spacing: 0.01em; text-align: center; padding: 0 1.5rem;
+  text-shadow: 0 2px 14px rgba(0,0,0,0.75);
+}
+@media (prefers-reduced-motion: reduce) {
+  #chapter-art-bg, #chapter-art-splash { transition: none; }
+}
+/* Коли увімкнено арт-фон — текст отримує темне halo, щоб ЗАВЖДИ читався поверх
+   будь-якої картинки. Це краще за панель-підкладку: фон не «рветься», арт видно. */
+body.chapter-art-on #reader-screen.walking-active .walk-line {
+  text-shadow: 0 1px 9px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.9);
+}
+body.chapter-art-on #text-content {
+  text-shadow: 0 1px 7px rgba(0,0,0,0.88), 0 0 2px rgba(0,0,0,0.85);
+}
+/* Текст у рідері НІКОЛИ не виділяється → вбиває Chrome «Touch to Search»/контекст-меню
+   Google при тапі. Переклад робиться тапом, нативне виділення не потрібне.
+   Поля вводу (пошук/словничок) лишаються виділюваними. */
+#reader-screen, #reader-screen * {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+#reader-screen input, #reader-screen textarea {
+  -webkit-user-select: text; user-select: text;
+}
+
 /* ── Topbar ── */
 .reader-topbar {
   height: 64px; flex-shrink: 0;
@@ -422,8 +499,19 @@ input::placeholder { color: var(--text-dim); }
   background: var(--bg2);
   backdrop-filter: blur(24px) saturate(1.3);
   -webkit-backdrop-filter: blur(24px) saturate(1.3);
-  position: relative; z-index: 10;
+  position: relative; z-index: 20;
 }
+/* У walk топбар стає НАКЛАДКОЮ (absolute), а не grid-рядком: текст завжди займає повну
+   висоту (від стелі до плеєра) і НЕ стрибає при появі/зникненні топбару.
+   ⚠️ Топбар виходить з потоку → grid лишається з 2 in-flow items (текст+плеєр),
+   тому в walk перевизначаємо рядки на `1fr auto` (інакше текст з'їде в auto і схлопнеться). */
+#reader-screen.screen.active.walking-active { grid-template-rows: 1fr auto; }
+#reader-screen.walking-active .reader-topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 16;
+  transition: opacity 0.3s ease;
+}
+/* Walk + програвання: топбар плавно зникає (fade), текст НЕ рухається (накладка). */
+#reader-screen.walk-immersive .reader-topbar { opacity: 0; pointer-events: none; }
 .topbar-left {
   display: flex; align-items: center; gap: 13px;
   width: 300px; flex-shrink: 0;
@@ -514,6 +602,7 @@ input::placeholder { color: var(--text-dim); }
   font-weight: 600; letter-spacing: 0.04em;
   padding: 6px 0 10px; background: var(--bg); flex-shrink: 0; z-index: 2;
   font-variant-numeric: tabular-nums;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
 #reader-screen.walking-active .page-strip { display: none; }
 
@@ -531,8 +620,11 @@ input::placeholder { color: var(--text-dim); }
 .text-sentence {
   cursor: pointer; border-radius: 3px;
   padding: 2px 0; display: inline; position: relative;
-  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), color 0.3s ease;
+  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), color 0.3s ease, opacity 0.4s ease;
 }
+/* #7 Focus-режим: під час програвання в читанні неактивні речення приглушуються —
+   «прожектор» на поточному. Вмикається на play, знімається на паузі (вільне читання). */
+#reader-screen.reading-focus #text-inner .text-sentence:not(.active) { opacity: 0.45; }
 .text-sentence.active {
   background: var(--hl);
   /* clone makes the inline background wrap cleanly across justified line breaks
@@ -544,24 +636,105 @@ input::placeholder { color: var(--text-dim); }
 .text-sentence.past { color: var(--faint, var(--text-dim)); }
 
 /* ── Dialogue voice ── */
+/* Default CSS variables — overridden by user settings (app.js/settings.js) */
+:root {
+  --dialogue-color: #c8a85a;
+  --dialogue-font-style: italic;
+  --dialogue-text-shadow: none;
+  --dialogue-intensity: 2;   /* 1=low 2=medium 3=high */
+  --system-color: #d8a24a;
+  --system-font-style: normal;
+  --system-text-shadow: none;
+}
 .text-sentence.dialogue {
   font-family: var(--serif);
-  font-style: italic;
-  color: var(--accent2);
+  font-style: var(--dialogue-font-style, italic);
+  color: var(--dialogue-color);
 }
-body[data-theme="dark"] .text-sentence.dialogue { color: #f6b8c8; }
 .text-sentence.past.dialogue { color: var(--faint); }
+/* System text (LitRPG status boxes, announcements) */
+.text-sentence.system {
+  color: var(--system-color);
+  font-style: var(--system-font-style, normal);
+}
+.text-sentence.past.system { color: var(--faint); }
+
+/* ── LitRPG System status-window cards ──────────────────────────────────────
+   Картка застосовується до САМОГО елемента-абзацу (де весь текст жирний = System).
+   Інлайн-жирні вкраплення сюди не потрапляють, тож крихітних боксів немає. */
+.system-block {
+  display: block;
+  margin: 1.1em 0;
+  padding: 0.65em 1.05em;
+  border: 1px solid rgba(216,162,74,0.5);                    /* fallback */
+  border: 1px solid color-mix(in srgb, var(--system-color) 55%, transparent);
+  border-radius: 10px;
+  background: rgba(216,162,74,0.07);                          /* fallback */
+  background: color-mix(in srgb, var(--system-color) 9%, transparent);
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  line-height: 1.5;
+  break-inside: avoid; -webkit-column-break-inside: avoid;    /* не рвати вікно між колонками */
+}
+.system-block + .system-block { margin-top: -0.5em; }         /* сусідні System-абзаци = одне вікно */
+
+/* System-сповіщення: коли System-блок стає активним — коротка анімація «появи вікна»
+   (сяйво + легкий підйом). Жодного дубльованого тексту, наратор читає як завжди. */
+@keyframes systemPulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--system-color) 55%, transparent); }
+  18%  { box-shadow: 0 0 22px 5px color-mix(in srgb, var(--system-color) 60%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--system-color) 0%, transparent); }
+}
+.system-pulse { animation: systemPulse 1.5s ease-out; }
+@media (prefers-reduced-motion: reduce) { .system-pulse { animation: none; } }
+
+/* Walk-режим: System-блок як картка по центру */
+.walk-line.walk-system-block {
+  border: 1px solid rgba(216,162,74,0.5);                    /* fallback */
+  border: 1px solid color-mix(in srgb, var(--system-color) 55%, transparent);
+  border-radius: 12px;
+  background: rgba(216,162,74,0.07);
+  background: color-mix(in srgb, var(--system-color) 9%, transparent);
+  padding: 0.5em clamp(16px, 5vw, 32px);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
 
 /* ── Words ── */
 .word { transition: color 0.15s, opacity 0.15s; -webkit-touch-callout: none; }
 .word.dialogue { color: inherit; font-style: inherit; }
+.word.system { color: inherit; font-style: inherit; }
+/* Walk-mode: non-active dialogue and system words use colour variables (intensity-driven) */
+/* Walk: діалог/система завжди мають свою форму І колір — навіть активне слово
+   (active лише додає фон-підсвітку, НЕ перефарбовує → ширина й колір ролі зберігаються). */
+.walk-line .word.dialogue {
+  font-style: var(--dialogue-font-style, italic);
+  font-weight: 600;
+  color: var(--dialogue-color);
+  text-shadow: var(--dialogue-text-shadow, none);
+}
+.walk-line .word.system {
+  font-style: var(--system-font-style, normal);
+  font-weight: 600;
+  color: var(--system-color);
+  text-shadow: var(--system-text-shadow, none);
+}
+/* Активне слово (поточна позиція TTS) — karaoke-підсвітка ФОНОМ: окремий візуальний
+   канал, не конфліктує з кольором ролі. Колір тексту лишається семантичним
+   (наратив білий / діалог червоний / система ембер), фон рухається поверх будь-якого. */
 .word.active {
-  color: var(--accent);
-  text-decoration: underline;
-  text-decoration-color: var(--accent);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 3px;
-  transition: color 0.1s, text-decoration-color 0.1s;
+  font-style: inherit;   /* зберегти курсив/форму */
+  font-weight: inherit;
+  background: rgba(216, 162, 74, 0.30);                       /* fallback */
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 5px;
+  /* Падінг розширює фон підсвітки, але НЕ повинен міняти ширину слова в потоці,
+     інакше рядок перераховує перенос і слово «стрибає» в наступний/минулий рядок.
+     Негативний маргін точно компенсує падінг → inline-advance незмінний. */
+  padding: 0 1px;
+  margin: 0 -1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition: background 0.12s ease;
 }
 body[data-theme="dark"] .word.active { text-shadow: 0 0 16px var(--accent-glow, var(--accent)); }
 .word.past { opacity: 0.45; }
@@ -639,6 +812,13 @@ body[data-theme="dark"] .word.active { text-shadow: 0 0 16px var(--accent-glow, 
 #reader-screen:not(.walking-active) #text-inner p {
   margin: 0 0 var(--para-gap, 1em) 0; text-indent: 0;
 }
+/* #8 Буквиця: велика перша літера першого абзацу розділу (не чіпає System-картки). */
+#reader-screen:not(.walking-active) #text-inner > p:first-of-type:not(.system-block)::first-letter {
+  font-family: var(--serif);
+  font-size: 3.1em; line-height: 0.82;
+  float: left; padding: 0.02em 0.12em 0 0;
+  color: var(--accent); font-weight: 600;
+}
 
 /* ── Edge-tap zones (reading mode page turn) ── */
 /* Invisible 12%-wide zones on left/right of text area.
@@ -674,7 +854,7 @@ body[data-theme="dark"] .word.active { text-shadow: 0 0 16px var(--accent-glow, 
 }
 .walk-line {
   flex-shrink: 0;
-  padding: 0 90px;
+  padding: 0 clamp(16px, 5vw, 32px);
   text-align: center;
   font-family: var(--serif, var(--font-reading));
   font-size: calc(var(--font-size, 21px) * 1.6);
@@ -694,6 +874,13 @@ body[data-theme="dark"] .word.active { text-shadow: 0 0 16px var(--accent-glow, 
 body[data-theme="dark"] .walk-line.walk-line-active {
   text-shadow: 0 0 26px var(--accent-glow, var(--accent));
 }
+/* #10 Доріжка-режим: максимальна читабельність на ходу — більший шрифт, чистий контраст,
+   більші зони тапа. Вмикається пунктом «🏃 Доріжка-режим» у walk-«більше». */
+body.treadmill-mode .walk-line { font-size: calc(var(--font-size, 21px) * 1.9); color: #fff; }
+body.treadmill-mode .walk-ctrl-btn { padding: 1.35rem 0; }
+body.treadmill-mode .walk-ctrl-btn-icon { font-size: 2.5rem; }
+body.treadmill-mode .walk-ctrl-sub-btn { padding: 0.6rem 1.2rem; font-size: 1rem; }
+.walk-more-item.treadmill-on { color: var(--accent, #d4af37); }
 /* walking: same player layout as reading — no overrides needed */
 #text-content.loading { opacity: 0.5; transition: opacity 0.2s; }
 #text-content.loading::after { content: 'Завантаження...'; display: block; text-align: center; padding: 2rem; color: var(--text-muted); font-size: 0.9rem; }
@@ -727,6 +914,7 @@ body.theme-switching { animation: themeFade 0.35s ease; }
   border-top: 1px solid var(--line, var(--border));
   padding: 15px 36px 18px;
   z-index: 20;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   transition: transform var(--transition-smooth), opacity var(--transition-smooth), background 0.5s;
 }
 
@@ -818,6 +1006,24 @@ body.theme-switching { animation: themeFade 0.35s ease; }
 }
 .player-ico:hover { color: var(--ink, var(--text)); border-color: var(--line2, var(--surface3)); }
 .player-ico:active { transform: scale(0.88); color: var(--accent); }
+
+/* #9 Progress ring навколо play (прогрес у розділі) */
+.play-wrap {
+  position: relative; width: 82px; height: 82px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.play-ring {
+  position: absolute; inset: -6px; width: calc(100% + 12px); height: calc(100% + 12px);
+  transform: rotate(-90deg); pointer-events: none;
+}
+.play-ring-bg, .play-ring-fill { fill: none; stroke-width: 4; }
+.play-ring-bg { stroke: rgba(255,255,255,0.12); }
+.play-ring-fill {
+  stroke: var(--accent); stroke-linecap: round;
+  stroke-dasharray: 289;          /* 2πr, r=46 */
+  stroke-dashoffset: 289;         /* 0% → повне коло порожнє */
+  transition: stroke-dashoffset 0.35s linear;
+}
 
 /* Big play button */
 .play-btn {
@@ -947,10 +1153,13 @@ body.theme-switching { animation: themeFade 0.35s ease; }
 /* Sleep Timer */
 .sleep-timer-active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
 .sleep-timer-menu {
-  position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+  /* fixed: працює і в reading (плеєр), і в walk (де controls-row плеєра схований).
+     Координати (left/top/bottom) виставляє JS відносно кнопки-тригера. */
+  position: fixed; z-index: 60;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 0.5rem; display: none; flex-direction: column; gap: 0.3rem; z-index: 25;
+  padding: 0.5rem; display: none; flex-direction: column; gap: 0.3rem;
   min-width: 150px; box-shadow: var(--shadow-lg);
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
 .sleep-timer-menu.show { display: flex; }
 .sleep-timer-option {
@@ -961,9 +1170,10 @@ body.theme-switching { animation: themeFade 0.35s ease; }
 
 /* OVERLAY */
 .overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.4);
-  z-index: 29; display: none; backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  /* БЕЗ backdrop-filter: повноекранне розмиття живого тексту перемальовувалось щокадру
+     під час слайду панелі → видимі ривки. Темний dim дає той самий фокус, але без GPU-ціни. */
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  z-index: 29; display: none;
   transition: opacity 0.3s ease;
 }
 .overlay.show { display: block; }
@@ -994,13 +1204,43 @@ body.theme-switching { animation: themeFade 0.35s ease; }
   border-top: 1px solid var(--line, var(--border));
   border-radius: 22px 22px 0 0; z-index: 30;
   transform: translateY(100%);
-  box-shadow: 0 -20px 60px rgba(0,0,0,0.4);
+  box-shadow: 0 -12px 32px rgba(0,0,0,0.4);   /* менший blur-радіус → дешевша растеризація */
   transition: transform 0.32s cubic-bezier(.22,1,.36,1);
+  will-change: transform;   /* окремий GPU-шар */
+  contain: paint layout style;  /* ізолює paint важких нативних повзунків/селектів під час слайду */
   max-height: 80vh; overflow-y: auto; overscroll-behavior: contain;
   scrollbar-width: none;
 }
 .bottom-panel::-webkit-scrollbar { display: none; }
-.bottom-panel.open { transform: translateY(0); animation: sheetUp .32s cubic-bezier(.22,1,.36,1); }
+/* ⚠️ БЕЗ animation: sheetUp — вона конфліктувала з transition (панель стрибала зі 100%
+   на 40px і доїжджала, видимі кадри). Чистий transform-transition = плавно 60fps. */
+.bottom-panel.open { transform: translateY(0); }
+/* Контент проявляється ПІСЛЯ старту слайду: поки панель найшвидше рухається, важкі
+   нативні повзунки/селекти (Налаштування) не малюються (opacity:0) → слайд плавний. */
+.bottom-panel > * { transition: opacity 0.22s ease 0.16s; }
+.bottom-panel:not(.open) > * { opacity: 0; }
+
+/* Кастомний повзунок (замість нативного <input type=range>): композититься дешево,
+   тому панель Налаштувань їде плавно (нативні range/track тримали головний потік). */
+.cslider {
+  position: relative; height: 30px; display: inline-flex; align-items: center;
+  cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent;
+  user-select: none; -webkit-user-select: none;
+}
+.cslider-track {
+  position: relative; width: 100%; height: 5px; border-radius: 3px;
+  background: var(--line2, rgba(255,255,255,0.16));
+}
+.cslider-fill {
+  position: absolute; left: 0; top: 0; height: 100%; border-radius: 3px;
+  background: var(--accent); width: 0%;
+}
+.cslider-thumb {
+  position: absolute; top: 50%; left: 0%; width: 17px; height: 17px; border-radius: 50%;
+  background: var(--accent); transform: translate(-50%, -50%);
+  box-shadow: 0 1px 5px rgba(0,0,0,0.45); transition: transform 0.1s;
+}
+.cslider:active .cslider-thumb { transform: translate(-50%, -50%) scale(1.18); }
 .panel-handle { display: none; }
 .panel-close {
   width: 38px; height: 38px;
@@ -1347,6 +1587,226 @@ audio { display: none; }
 }
 .translate-hint-fab.visible { opacity: 1; pointer-events: auto; }
 
+/* ── Walk controls panel ────────────────────────────────── */
+#walk-controls {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 50;
+  background: rgba(15, 14, 13, 0.96);
+  border-top: 1px solid rgba(212, 175, 55, 0.25);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 1rem 1rem env(safe-area-inset-bottom, 0.5rem);
+  display: none;
+  flex-direction: column;
+  gap: 0.75rem;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#walk-controls.visible { display: flex; }
+/* Поки відкрита будь-яка нижня панель (Налаштування/Перекладач/Розділи) — walk-controls
+   (z:50, root-контекст) НЕ має лежати поверх неї. Декларативно, без залежності від
+   таймінгу JS (race з pause-подією). */
+body:has(.bottom-panel.open) #walk-controls { display: none !important; }
+
+/* Walk mode: keep player-bar but slim it down — show only the progress strip,
+   hide chapter name and controls row. */
+#reader-screen.walking-active #player-bar { padding: 0.25rem 0.75rem; }
+#reader-screen.walking-active #player-bar .chapter-name { display: none; }
+#reader-screen.walking-active #player-bar .controls-row { display: none; }
+
+.walk-controls-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  position: relative;
+}
+
+.walk-ctrl-btn {
+  flex: 1;
+  min-height: 80px;
+  border-radius: 14px;
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  background: rgba(255, 255, 255, 0.05);
+  color: #d4c8a8;
+  font-size: 1.05rem;
+  font-family: var(--font-ui, sans-serif);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  transition: background 0.15s, transform 0.1s;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.walk-ctrl-btn:active { background: rgba(212, 175, 55, 0.15); transform: scale(0.96); }
+
+.walk-ctrl-btn-icon { font-size: 2rem; line-height: 1; }
+.walk-ctrl-btn-label { font-size: 0.72rem; color: #9b8b74;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+
+/* Sub-row: timer + more (smaller pill buttons) */
+.walk-controls-sub {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  position: relative;
+}
+.walk-ctrl-sub-btn {
+  padding: 0.4rem 0.9rem;
+  border-radius: 20px;
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  background: rgba(255, 255, 255, 0.04);
+  color: #9b8b74;
+  font-size: 0.88rem;
+  font-family: var(--font-ui, sans-serif);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  transition: background 0.15s;
+}
+.walk-ctrl-sub-btn:active { background: rgba(212, 175, 55, 0.15); color: var(--accent, #d4af37); }
+.walk-ctrl-sub-btn-timer { color: #c8b87a; border-color: rgba(212, 175, 55, 0.35); }
+/* Таймер зведено — видиме підтвердження (інакше в прогулянці не видно стану) */
+.walk-ctrl-sub-btn-timer.timer-armed {
+  color: var(--accent, #d4af37);
+  border-color: var(--accent, #d4af37);
+  background: rgba(212, 175, 55, 0.18);
+}
+
+.walk-ctrl-btn-translate {
+  border-color: var(--accent, #d4af37);
+  background: rgba(212, 175, 55, 0.1);
+  color: var(--accent, #d4af37);
+}
+.walk-ctrl-btn-translate .walk-ctrl-btn-label { color: rgba(212, 175, 55, 0.7); }
+.walk-ctrl-btn-translate:active { background: rgba(212, 175, 55, 0.25); }
+
+.walk-ctrl-more-btn {
+  position: absolute;
+  top: -0.5rem;
+  right: 0;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  background: rgba(15, 14, 13, 0.9);
+  color: #9b8b74;
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  z-index: 2;
+}
+.walk-ctrl-more-btn:active { background: rgba(212, 175, 55, 0.15); }
+
+/* Distance chip */
+.walk-dist-chip { display:none; text-align:center; font-size:11px; color:#d8a24a; padding:0 0 5px; font-family:var(--font-ui,sans-serif); opacity:0.85; letter-spacing:.02em; }
+.walk-dist-chip.has-distance { display:block; }
+
+/* Syslog panel */
+.syslog-count-badge { background:#241d0f; border:1px solid rgba(212,175,55,.3); border-radius:12px; padding:2px 9px; font-size:11px; color:#d8a24a; font-family:var(--font-ui,sans-serif); margin-left:auto; }
+.syslog-pinned-label { font-size:10px; color:#d8a24a; font-family:var(--font-ui,sans-serif); text-transform:uppercase; letter-spacing:.06em; padding:10px 16px 4px; display:flex; align-items:center; gap:8px; }
+.syslog-pinned-label::after { content:''; flex:1; height:1px; background:rgba(212,175,55,.25); }
+.syslog-log-label { font-size:10px; color:#5a5040; font-family:var(--font-ui,sans-serif); text-transform:uppercase; letter-spacing:.06em; padding:14px 16px 4px; display:flex; align-items:center; gap:8px; }
+.syslog-log-label::after { content:''; flex:1; height:1px; background:rgba(255,255,255,.07); }
+.syslog-ch-label { font-size:10px; color:#5a5040; text-transform:uppercase; letter-spacing:.06em; padding:8px 16px 3px; font-family:var(--font-ui,sans-serif); }
+.syslog-block { margin:6px 14px; background:rgba(212,175,55,.06); border:1px solid rgba(212,175,55,.2); border-left:2px solid #d8a24a; border-radius:0 8px 8px 0; padding:9px 12px; font-size:13px; line-height:1.6; white-space:pre-wrap; font-family:'Courier New',monospace; color:#c4b8a0; }
+.syslog-block-pinned { margin:6px 14px 8px; background:rgba(212,175,55,.11); border-color:rgba(212,175,55,.45); }
+.syslog-empty { text-align:center; padding:3rem 1rem; color:#5a5040; font-family:var(--font-ui,sans-serif); font-size:14px; }
+
+/* System Log tabs (Events | Character) */
+.syslog-tabs { display:flex; gap:6px; padding:4px 16px 8px; }
+.syslog-tabs .seg-btn { flex:1; }
+
+/* Character sheet cards */
+.cs-card { margin:10px 14px; background:rgba(212,175,55,.06); border:1px solid rgba(212,175,55,.22); border-radius:10px; padding:12px 14px; font-family:var(--font-ui,sans-serif); }
+.cs-card-head { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:6px; }
+.cs-name { font-size:16px; font-weight:700; color:#e3c876; }
+.cs-level { font-size:12px; color:#1a1612; background:#d8a24a; border-radius:10px; padding:2px 10px; font-weight:700; }
+.cs-hp { font-size:13px; color:#c4b8a0; margin-bottom:8px; font-family:'Courier New',monospace; }
+.cs-stat-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin:8px 0 10px; }
+.cs-stat { background:rgba(0,0,0,.25); border:1px solid rgba(212,175,55,.15); border-radius:7px; padding:6px 2px; text-align:center; }
+.cs-stat-k { font-size:9px; letter-spacing:.06em; color:#8a7d60; text-transform:uppercase; }
+.cs-stat-v { font-size:17px; font-weight:700; color:#e3c876; line-height:1.2; }
+.cs-section-label { font-size:10px; color:#8a7d60; text-transform:uppercase; letter-spacing:.06em; margin:8px 0 5px; }
+.cs-chips { display:flex; flex-wrap:wrap; gap:5px; }
+.cs-chip { font-size:12px; color:#c4b8a0; background:rgba(212,175,55,.1); border:1px solid rgba(212,175,55,.25); border-radius:14px; padding:3px 10px; }
+.cs-notable { font-size:12.5px; color:#b3a890; line-height:1.5; padding:3px 0; border-left:2px solid rgba(212,175,55,.3); padding-left:9px; margin:3px 0; }
+
+/* Character dossier panel */
+.char-row { margin:6px 14px; background:rgba(212,175,55,.05); border:1px solid rgba(212,175,55,.18); border-radius:9px; padding:10px 13px; cursor:pointer; font-family:var(--font-ui,sans-serif); transition:background .15s; }
+.char-row:active { background:rgba(212,175,55,.12); }
+.char-row-main { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+.char-row-name { font-size:15px; font-weight:700; color:#e3c876; }
+.char-row-meta { font-size:11px; color:#8a7d60; flex-shrink:0; }
+.char-row-sub { font-size:12.5px; color:#b3a890; line-height:1.45; margin-top:3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.dossier-head { display:flex; align-items:center; gap:12px; padding:6px 16px 10px; }
+.dossier-back { background:none; border:1px solid rgba(212,175,55,.3); color:#d8a24a; border-radius:14px; padding:4px 12px; font-size:12px; cursor:pointer; font-family:var(--font-ui,sans-serif); }
+.dossier-name { font-size:18px; font-weight:700; color:#e3c876; }
+.dossier-text { margin:4px 16px 8px; font-size:14px; line-height:1.65; color:#cabfa8; font-family:var(--font-ui,sans-serif); }
+.dossier-fact { margin:4px 16px; font-size:12.5px; line-height:1.5; color:#a89c84; border-left:2px solid rgba(212,175,55,.25); padding:2px 0 2px 9px; }
+.dossier-toggle { margin:10px 16px 6px; background:none; border:1px solid rgba(212,175,55,.25); color:#8a7d60; border-radius:14px; padding:5px 14px; font-size:12px; cursor:pointer; font-family:var(--font-ui,sans-serif); }
+.dossier-toggle:active { background:rgba(212,175,55,.08); }
+
+/* Popover menu */
+#walk-more-popover {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  right: 0;
+  background: #1a1814;
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  border-radius: 10px;
+  overflow: hidden;
+  display: none;
+  flex-direction: column;
+  min-width: 180px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  z-index: 60;
+}
+#walk-more-popover.open { display: flex; }
+/* Таймер-popover — той самий механізм, що й more (працює надійно у walk-контексті),
+   але прив'язаний ліворуч (кнопка таймера — ліва в sub-row). */
+.walk-sub-anchor { position: relative; display: inline-flex; }
+#walk-timer-popover {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 0;
+  background: #1a1814;
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  border-radius: 10px;
+  overflow: hidden;
+  display: none;
+  flex-direction: column;
+  min-width: 180px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  z-index: 60;
+}
+#walk-timer-popover.open { display: flex; }
+.walk-more-item {
+  padding: 0.85rem 1.2rem;
+  font-size: 0.95rem;
+  color: #d4c8a8;
+  font-family: var(--font-ui, sans-serif);
+  cursor: pointer;
+  border: none;
+  background: none;
+  text-align: left;
+  width: 100%;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.walk-more-item:not(:last-child) { border-bottom: 1px solid rgba(255,255,255,0.06); }
+.walk-more-item:active { background: rgba(212, 175, 55, 0.12); color: var(--accent, #d4af37); }
+
 /* ── Shelf mode ─────────────────────────────────────────── */
 .shelf { margin-bottom: 2rem; grid-column: 1 / -1; padding: 0 44px; }
 .shelf-header {
@@ -1365,10 +1825,12 @@ audio { display: none; }
 }
 .shelf-row::-webkit-scrollbar { display: none; }
 .shelf-card {
-  flex: 0 0 120px;
+  flex: 0 0 112px;
   scroll-snap-align: start;
   position: relative;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
 }
 .shelf-card:active .shelf-cover { opacity: 0.85; }
 .shelf-cover {
@@ -1379,8 +1841,17 @@ audio { display: none; }
   overflow: hidden;
   position: relative;
 }
-.shelf-card-title {
+/* Рядок "назва + dl-badge" під обкладинкою */
+.shelf-card-footer {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.3rem;
   margin-top: 0.35rem;
+  min-height: 2.4rem;
+}
+.shelf-card-title {
+  flex: 1 1 0;
+  min-width: 0;
   font-size: 0.8rem;
   line-height: 1.3;
   color: var(--text-muted);
@@ -1388,6 +1859,25 @@ audio { display: none; }
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+/* dl-badge inside shelf-card: compact, static, not absolute */
+.shelf-card .dl-badge {
+  position: static;
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  min-width: unset;
+  padding: 0;
+  font-size: 0.75rem;
+  background: var(--surface3, rgba(255,255,255,0.08));
+  color: var(--text-dim);
+  margin-top: 0.05rem;
+  border: 1px solid var(--border);
+}
+.shelf-card .dl-badge.dl-done {
+  background: rgba(16,185,129,0.18);
+  color: #10b981;
+  border-color: rgba(16,185,129,0.4);
 }
 .shelf-badge {
   position: absolute;
@@ -1463,13 +1953,10 @@ audio { display: none; }
 <body>
 <!-- LOGIN -->
 <div id="login-screen" class="screen">
+  <div class="login-inner">
   <div class="logo">ReadAlong</div>
   <div class="logo-sub">Storyteller Reader</div>
   <div class="card">
-    <div>
-      <label class="field-label" for="server-url">Адреса сервера</label>
-      <input type="url" id="server-url" placeholder="http://192.168.0.200:8001">
-    </div>
     <div>
       <label class="field-label" for="username">Логін або email</label>
       <input type="text" id="username" autocomplete="username">
@@ -1478,20 +1965,10 @@ audio { display: none; }
       <label class="field-label" for="password">Пароль</label>
       <input type="password" id="password" autocomplete="current-password">
     </div>
-    <div>
-      <label class="field-label" for="api-provider">API провайдер</label>
-      <select id="api-provider">
-        <option value="deepseek">DeepSeek V4 Flash (швидкий, дешевий)</option>
-        <option value="claude">Claude Sonnet 4 (якісний)</option>
-      </select>
-    </div>
-    <div>
-      <label class="field-label" for="api-key">API ключ</label>
-      <input type="password" id="api-key" placeholder="sk-..." autocomplete="off">
-    </div>
     <div class="error-msg" id="login-error"></div>
     <button class="btn-primary" id="login-btn" data-action="do-login">Увійти</button>
     <button class="install-btn" id="install-btn" data-action="install-pwa">📲 Встановити застосунок</button>
+  </div>
   </div>
 </div>
 
@@ -1544,6 +2021,10 @@ audio { display: none; }
 
 <!-- READER -->
 <div id="reader-screen" class="screen">
+  <!-- Атмосферний арт розділу: тихий розмитий фон за текстом (z-index:-1) -->
+  <div id="chapter-art-bg" aria-hidden="true"></div>
+  <!-- Заставка на початку розділу: крупний арт + назва, зникає за кілька секунд -->
+  <div id="chapter-art-splash" aria-hidden="true"><img alt=""><div class="splash-title"></div></div>
   <div id="reading-progress"><div id="reading-progress-fill"></div></div>
   <div class="reader-topbar">
     <div class="topbar-left">
@@ -1566,6 +2047,9 @@ audio { display: none; }
       <div class="overflow-menu" id="overflow-menu" style="display:none;">
         <button class="overflow-item" data-action="open-translate">✦ Перекласти речення</button>
         <button class="overflow-item" data-action="show-book-info">ⓘ Про книгу</button>
+        <button class="overflow-item" data-action="open-syslog-and-close">System Log</button>
+        <button class="overflow-item" data-action="open-chars-and-close">👤 Персонажі</button>
+        <button class="overflow-item" data-action="open-stats-and-close">⚡ Статистика</button>
         <button class="overflow-item" data-action="toggle-immersive">⛶ Імерсивний режим</button>
         <button class="overflow-item" data-action="open-verifier-and-close">🩺 Перевірити книгу</button>
       </div>
@@ -1587,13 +2071,57 @@ audio { display: none; }
 
   <div id="walking-tutorial" class="walk-overlay walk-tutorial">
     <div class="walk-tutorial-box">
-      <div class="walk-tutorial-row"><span class="walk-icon">⊙</span>tap центр — пауза</div>
-      <div class="walk-tutorial-row"><span class="walk-icon">←→</span>swipe — речення</div>
-      <div class="walk-tutorial-row"><span class="walk-icon">↑</span>swipe вгору — переклад</div>
-      <div class="walk-tutorial-row"><span class="walk-icon">↓</span>swipe вниз — вихід</div>
-      <div class="walk-tutorial-row"><span class="walk-icon">●●</span>довго — закладка</div>
-      <div class="walk-tutorial-row"><span class="walk-icon">⇿</span>pinch — розмір</div>
+      <div class="walk-tutorial-row"><span class="walk-icon">⊙</span>Торкніться екрана — пауза та кнопки</div>
+      <div class="walk-tutorial-row"><span class="walk-icon">⇿</span>Двома пальцями — розмір шрифту</div>
       <div class="walk-tutorial-hint">торкніться будь-де</div>
+    </div>
+  </div>
+
+  <!-- Walk controls panel — visible only on pause in walking mode -->
+  <div id="walk-controls" role="toolbar" aria-label="Керування відтворенням">
+    <!-- Row 1: main large buttons -->
+    <div class="walk-controls-main">
+      <button class="walk-ctrl-btn" id="walk-btn-prev" aria-label="Попередній блок">
+        <span class="walk-ctrl-btn-icon">⏮</span>
+        <span class="walk-ctrl-btn-label">назад</span>
+      </button>
+      <button class="walk-ctrl-btn walk-ctrl-btn-translate" id="walk-btn-translate" aria-label="Перекласти активну фразу">
+        <span class="walk-ctrl-btn-icon">🌐</span>
+        <span class="walk-ctrl-btn-label">переклад</span>
+      </button>
+      <button class="walk-ctrl-btn" id="walk-btn-next" aria-label="Наступний блок">
+        <span class="walk-ctrl-btn-icon">⏭</span>
+        <span class="walk-ctrl-btn-label">далі</span>
+      </button>
+    </div>
+    <!-- Row 2: secondary controls -->
+    <div id="walk-dist-chip" class="walk-dist-chip"><span id="walk-dist-today">0.0</span> км сьогодні</div>
+    <div class="walk-controls-sub">
+      <div class="walk-sub-anchor">
+        <button class="walk-ctrl-sub-btn walk-ctrl-sub-btn-timer" id="walk-btn-timer" aria-label="Таймер сну" aria-haspopup="true">
+          <span>⏳</span><span>таймер</span>
+        </button>
+        <div id="walk-timer-popover" role="menu">
+          <button class="walk-more-item" data-min="15" role="menuitem">15 хвилин</button>
+          <button class="walk-more-item" data-min="30" role="menuitem">30 хвилин</button>
+          <button class="walk-more-item" data-min="45" role="menuitem">45 хвилин</button>
+          <button class="walk-more-item" data-min="chapter" role="menuitem">До кінця розділу</button>
+          <button class="walk-more-item" data-min="0" role="menuitem">Вимкнути</button>
+        </div>
+      </div>
+      <button class="walk-ctrl-sub-btn" id="walk-btn-more" aria-label="Більше дій" aria-haspopup="true">
+        <span>⋯</span><span>більше</span>
+      </button>
+      <div id="walk-more-popover" role="menu">
+        <button class="walk-more-item" id="walk-more-chapters" role="menuitem" aria-label="Розділи">Розділи</button>
+        <button class="walk-more-item" id="walk-more-bookmark" role="menuitem" aria-label="Закладка">Закладка</button>
+        <button class="walk-more-item" id="walk-more-treadmill" role="menuitem" aria-label="Доріжка-режим">🏃 Доріжка-режим</button>
+        <button class="walk-more-item" id="walk-more-stats" role="menuitem" aria-label="Статистика доріжки">⚡ Статистика</button>
+        <button class="walk-more-item" id="walk-more-syslog" role="menuitem" aria-label="Лист Системи">System Log</button>
+        <button class="walk-more-item" id="walk-more-chars" role="menuitem" aria-label="Персонажі">👤 Персонажі</button>
+        <button class="walk-more-item" id="walk-more-settings" role="menuitem" aria-label="Налаштування">Налаштування</button>
+        <button class="walk-more-item" id="walk-more-reading" role="menuitem" aria-label="Вихід у режим читання">Вихід (режим читання)</button>
+      </div>
     </div>
   </div>
 
@@ -1644,9 +2172,15 @@ audio { display: none; }
       <!-- Center: ‹‹ Play ›› -->
       <div class="controls-center">
         <button class="player-ico" data-action="prev-sentence" aria-label="Попереднє речення">‹‹</button>
-        <button class="play-btn" id="play-btn" data-action="toggle-play" aria-label="Відтворити/Пауза">
-          <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-        </button>
+        <div class="play-wrap">
+          <svg class="play-ring" viewBox="0 0 100 100" aria-hidden="true">
+            <circle class="play-ring-bg" cx="50" cy="50" r="46"/>
+            <circle class="play-ring-fill" id="play-ring-fill" cx="50" cy="50" r="46"/>
+          </svg>
+          <button class="play-btn" id="play-btn" data-action="toggle-play" aria-label="Відтворити/Пауза">
+            <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          </button>
+        </div>
         <button class="player-ico" data-action="next-sentence" aria-label="Наступне речення">››</button>
       </div>
 
@@ -1771,7 +2305,7 @@ audio { display: none; }
       </div>
       <div class="srow">
         <span class="settings-label">Радіус кутів: <span id="radius-label">14px</span></span>
-        <input type="range" min="0" max="22" step="1" value="14" id="radius-slider" style="width:130px;accent-color:var(--accent);">
+        <div class="cslider" id="radius-slider" data-min="0" data-max="22" data-step="1" data-value="14" style="width:130px;"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
       </div>
       <div class="srow">
         <span class="settings-label">Акцент</span>
@@ -1787,10 +2321,69 @@ audio { display: none; }
     </div>
 
     <div class="settings-group">
+      <div class="sgroup">Підсвітка тексту</div>
+      <div class="srow">
+        <span class="settings-label">Діалог — колір</span>
+        <div style="display:flex;gap:6px;">
+          <button class="settings-btn" id="dc-warm" data-action="set-dialogue-color" data-color="#c8a85a" style="width:28px;height:28px;padding:0;border-radius:50%;background:#c8a85a;border:2px solid transparent;"></button>
+          <button class="settings-btn" id="dc-blue" data-action="set-dialogue-color" data-color="#7ab8e8" style="width:28px;height:28px;padding:0;border-radius:50%;background:#7ab8e8;border:2px solid transparent;"></button>
+          <button class="settings-btn" id="dc-rose" data-action="set-dialogue-color" data-color="#e86a8a" style="width:28px;height:28px;padding:0;border-radius:50%;background:#e86a8a;border:2px solid transparent;"></button>
+        </div>
+      </div>
+      <div class="srow">
+        <span class="settings-label">Діалог — інтенсивність: <span id="dialogue-intensity-label">2</span></span>
+        <div class="cslider" id="dialogue-intensity" data-min="1" data-max="3" data-step="1" data-value="2" style="width:120px;" oninput="window.setDialogueIntensity?.(this.value)"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
+      </div>
+      <div class="srow">
+        <span class="settings-label">System — колір</span>
+        <div style="display:flex;gap:6px;">
+          <button class="settings-btn" id="sc-amber" data-action="set-system-color" data-color="#d8a24a" style="width:28px;height:28px;padding:0;border-radius:50%;background:#d8a24a;border:2px solid transparent;"></button>
+          <button class="settings-btn" id="sc-cyan" data-action="set-system-color" data-color="#4ac9d8" style="width:28px;height:28px;padding:0;border-radius:50%;background:#4ac9d8;border:2px solid transparent;"></button>
+          <button class="settings-btn" id="sc-green" data-action="set-system-color" data-color="#4ad87a" style="width:28px;height:28px;padding:0;border-radius:50%;background:#4ad87a;border:2px solid transparent;"></button>
+        </div>
+      </div>
+      <div class="srow">
+        <span class="settings-label">System — інтенсивність: <span id="system-intensity-label">2</span></span>
+        <div class="cslider" id="system-intensity" data-min="1" data-max="3" data-step="1" data-value="2" style="width:120px;" oninput="window.setSystemIntensity?.(this.value)"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
+      </div>
+      <div class="srow">
+        <span class="settings-label">System — звук «дзинь»</span>
+        <div class="seg" id="system-chime-seg">
+          <button class="seg-btn active" data-action="set-system-chime" data-value="0">Вимк</button>
+          <button class="seg-btn" data-action="set-system-chime" data-value="1">Тихо</button>
+          <button class="seg-btn" data-action="set-system-chime" data-value="2">Гучніше</button>
+        </div>
+      </div>
+      <div class="srow">
+        <span class="settings-label">Арт розділу</span>
+        <div class="seg" id="chapter-art-seg">
+          <button class="seg-btn active" data-action="set-chapter-art" data-value="0">Вимк</button>
+          <button class="seg-btn" data-action="set-chapter-art" data-value="1">Фон</button>
+          <button class="seg-btn" data-action="set-chapter-art" data-value="2">Фон+заставка</button>
+        </div>
+      </div>
+      <div class="srow art-detail-row">
+        <span class="settings-label">Непрозорість: <strong id="art-opacity-display">60%</strong></span>
+        <div class="cslider" id="art-opacity-slider" data-min="0.1" data-max="1.0" data-step="0.05" data-value="0.6" style="width:130px;"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
+      </div>
+      <div class="srow art-detail-row">
+        <span class="settings-label">Розмиття: <strong id="art-blur-display">5px</strong></span>
+        <div class="cslider" id="art-blur-slider" data-min="0" data-max="20" data-step="1" data-value="5" style="width:130px;"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
+      </div>
+      <div class="srow art-detail-row">
+        <span class="settings-label">Кешувати арт</span>
+        <div class="seg" id="art-prefetch-seg">
+          <button class="seg-btn" data-action="set-art-prefetch" data-value="0">Вимк</button>
+          <button class="seg-btn active" data-action="set-art-prefetch" data-value="1">Авто</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
       <div class="sgroup">Прогулянка</div>
       <div class="srow">
         <span class="settings-label">Швидкість: <strong id="speed-display">1.0×</strong></span>
-        <input type="range" min="0.5" max="2.0" step="0.05" value="1.0" id="speed-slider" style="width:150px;accent-color:var(--accent);">
+        <div class="cslider" id="speed-slider" data-min="0.5" data-max="2.0" data-step="0.05" data-value="1.0" style="width:150px;"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
       </div>
       <div class="srow">
         <span class="settings-label">Крива анімації</span>
@@ -1802,7 +2395,7 @@ audio { display: none; }
       </div>
       <div class="srow">
         <span class="settings-label">Тривалість: <span id="anim-dur-label">560мс</span></span>
-        <input type="range" min="200" max="900" step="20" value="560" id="anim-dur-slider" style="width:130px;accent-color:var(--accent);">
+        <div class="cslider" id="anim-dur-slider" data-min="200" data-max="900" data-step="20" data-value="560" style="width:130px;"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
       </div>
       <div class="srow">
         <span class="settings-label">Глибина контексту</span>
@@ -1826,15 +2419,16 @@ audio { display: none; }
       </div>
       <div class="srow">
         <span class="settings-label">Міжрядковий інтервал</span>
-        <input type="range" min="1.6" max="2.2" step="0.05" value="1.85" id="line-h-slider" style="width:150px;accent-color:var(--accent);">
+        <div class="cslider" id="line-h-slider" data-min="1.6" data-max="2.2" data-step="0.05" data-value="1.85" style="width:150px;"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
       </div>
       <div class="srow">
         <span class="settings-label">Міжабзацний інтервал</span>
-        <input type="range" min="0" max="40" step="2" value="18" id="para-gap-slider" style="width:150px;accent-color:var(--accent);">
+        <div class="cslider" id="para-gap-slider" data-min="0" data-max="40" data-step="2" data-value="18" style="width:150px;"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
       </div>
       <div class="srow">
         <span class="settings-label">API провайдер</span>
         <select id="settings-api-provider" style="background:var(--bg2,var(--surface2));color:var(--ink,var(--text));border:1px solid var(--line,var(--border));border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit;">
+          <option value="ollama">Gemma 4 31B (Ollama)</option>
           <option value="deepseek">DeepSeek V4 Flash</option>
           <option value="claude">Claude Sonnet 4</option>
         </select>
@@ -1878,6 +2472,34 @@ audio { display: none; }
   <div id="verifier-body" style="padding: 0 1.25rem 2rem;"></div>
 </div>
 
+<!-- SYSLOG PANEL -->
+<div class="bottom-panel" id="syslog-panel">
+  <div class="sheet-header">
+    <div class="sheet-title">System Log</div>
+    <span id="syslog-count-badge" class="syslog-count-badge" hidden></span>
+    <button class="panel-close" data-action="close-panels">×</button>
+  </div>
+  <div id="syslog-tabs" class="syslog-tabs">
+    <button class="seg-btn active" data-tab="events" data-action="syslog-tab-events">Події</button>
+    <button class="seg-btn" data-tab="character" data-action="syslog-tab-character">Персонаж</button>
+  </div>
+  <div id="syslog-events-wrap">
+    <div id="syslog-content" style="padding:8px 0 28px;"></div>
+  </div>
+  <div id="syslog-char-wrap" hidden>
+    <div id="charsheet-content" style="padding:8px 0 28px;"></div>
+  </div>
+</div>
+
+<!-- CHARACTERS PANEL -->
+<div class="bottom-panel" id="chars-panel">
+  <div class="sheet-header">
+    <div class="sheet-title">👤 Персонажі</div>
+    <button class="panel-close" data-action="close-panels">×</button>
+  </div>
+  <div id="chars-content" style="padding:8px 0 28px;"></div>
+</div>
+
 <!-- STATS PANEL -->
 <div class="bottom-panel" id="stats-panel">
   <div class="sheet-header">
@@ -1896,6 +2518,7 @@ audio { display: none; }
   <div class="word-text" id="popup-word"></div>
   <div class="word-translation" id="popup-translation"></div>
   <button class="word-add-btn" id="popup-add-btn" data-action="add-popup-word">＋ Додати в словничок</button>
+  <button class="word-add-btn" id="popup-dossier-btn" data-action="open-dossier-from-popup" hidden>👤 Досьє</button>
 </div>
 
 <script type="module" src="js/app.js"></script>

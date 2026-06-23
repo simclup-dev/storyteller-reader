@@ -137,11 +137,15 @@ export async function parseEpub(blob) {
         if (!smil) return;
         const text = el.textContent.trim();
         if (!text || text.length < 3) return;
+        // System text detection: entire span content is wrapped in <b> or <strong>
+        const boldEl = el.querySelector('b, strong');
+        const isSystem = !!boldEl && boldEl.textContent.trim().length >= text.length - 2;
         sentences.push({
           text,
           clipBegin: smil.clipBegin,
           clipEnd: smil.clipEnd,
-          elId: id
+          elId: id,
+          _isSystem: isSystem
         });
       });
 
@@ -153,11 +157,14 @@ export async function parseEpub(blob) {
           const id = el.getAttribute('id') || '';
           const smil = id ? smilMap[id] : null;
           if (smil) {
+            const boldEl = el.querySelector('b, strong');
+            const isSystem = !!boldEl && boldEl.textContent.trim().length >= text.length - 2;
             sentences.push({
               text,
               clipBegin: smil.clipBegin,
               clipEnd: smil.clipEnd,
-              elId: id
+              elId: id,
+              _isSystem: isSystem
             });
           }
         });

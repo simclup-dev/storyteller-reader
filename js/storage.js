@@ -226,7 +226,8 @@ function audioCacheKey(bookId, epubChIdx) {
 /**
  * Save current reading progress
  */
-export function saveProgress() {
+// force=true — обійти 10с-тротлінг і ОДРАЗУ синхронізувати на сервер (пауза/вихід).
+export function saveProgress(force = false) {
   if (!state.bookId) return;
 
   const audio = getAudioElement();
@@ -237,7 +238,8 @@ export function saveProgress() {
     absTime,
     chapterIdx: state.currentChapterIdx,
     sentenceIdx: state.activeIdx,
-    totalDuration: state.totalDuration
+    totalDuration: state.totalDuration,
+    savedAt: Date.now()
   };
 
   try {
@@ -246,12 +248,13 @@ export function saveProgress() {
     console.warn(e);
   }
 
-  // Also save to server (throttled)
+  // Also save to server (throttled, unless forced)
   if (ac) {
     const now = Date.now();
-    if (!state._lastServerSave || now - state._lastServerSave > 10000) {
+    if (force || !state._lastServerSave || now - state._lastServerSave > 10000) {
       state._lastServerSave = now;
-      serverSaveProgress(state.bookId, absTime);
+      const currentHref = ac.href || '';
+      serverSaveProgress(state.bookId, absTime, state.totalDuration, currentHref);
     }
   }
 }
