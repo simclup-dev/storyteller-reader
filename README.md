@@ -13,6 +13,24 @@ A synchronized audiobook reader: the text highlights **word by word, karaoke-sty
 - **Sleep timer**, per-book progress sync, configurable themes and typography
 - **Exact-arithmetic pagination** — column layout computed analytically instead of via `getClientRects()`, which returns per-word rects and breaks column measurement (hard-won lesson)
 
+## Screenshots
+
+### Karaoke reading mode
+
+![Karaoke reading mode](docs/screenshots/01-karaoke-reading.png)
+
+### Walk mode
+
+![Walk mode](docs/screenshots/02-walk-mode.png)
+
+### Library view
+
+![Library view](docs/screenshots/03-library.png)
+
+### Translation flow
+
+![Translation flow](docs/screenshots/04-translation.png)
+
 ## Architecture
 
 20 focused modules instead of a framework — `state.js` (single store), `reader.js` (pagination & rendering), `audio.js` (playback & sync), `epub.js` (content parsing), `gestures.js`, `translate.js`, `sleep.js`, `auth.js`, `storage.js`, and friends. No build step: open it, it runs.
