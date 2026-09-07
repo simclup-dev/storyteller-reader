@@ -1,4 +1,4 @@
-// ReadAlong App - Main Orchestrator
+﻿// ReadAlong App - Main Orchestrator
 // Coordinates all modules and manages global dependencies
 
 import { secureGet } from './secureStore.js';
@@ -10,7 +10,7 @@ import { doLogin, doLogout, doDemoLogin, installPWA, initAuth } from './auth.js'
 import { loadBooks as loadBooksFromApi, renderBooks, filterBooks, setViewMode, toggleViewMode, toggleBooks, setFolderState, setFilter, setSort, expandShelf, syncLibraryProgress, reconcileDownloadBadges } from './books.js';
 import { openBook, loadChapter, renderChapters, showBookEnd, renderText, getAuthorName, activateWalkingGestures, deactivateWalkingGestures, resetPageState, downloadBookOffline, deleteBookDownload } from './reader.js';
 import { loadAudioChapter, togglePlay, prevSentence, nextSentence, sentenceTap, seekAudio, seekRel, setActive, onTimeUpdate as audioTimeUpdate, onAudioPlay, onAudioPause, requestWakeLock, releaseWakeLock } from './audio.js';
-import { openTranslate, selectTransSentence, resumeFromSelected, renderHistory, showHistoryDetail, addVocabFromSentence, addVocabWord, saveWord, toggleWordStatus, renderVocab, exportVocab, callOllama } from './translate.js';
+import { openTranslate, selectTransSentence, resumeFromSelected, renderHistory, showHistoryDetail, addVocabFromSentence, addVocabWord, saveWord, toggleWordStatus, renderVocab, exportVocab } from './translate.js';
 import { renderBookmarks, jumpToBookmark, removeBookmark, updateBookmarkBtn, toggleBookmark, downloadChapter, downloadAllChapters, updateDlButtons, goChapter } from './panels.js';
 import { initSettings, initSpeedControl, changeFontSize, toggleTheme, setTheme, setAccentColor, setAccentByName, forceThemeStyles, updateSpeedBtn, buildSpeedSlider, setSpeedFromSlider, setFontFamily, markBookFinished, resetBookProgress, exportAllData, importAllData, setDialogueColor, setDialogueIntensity, setSystemColor, setSystemIntensity, updateApiProvider, refreshCacheDisplay, setColumns, setLineH, setParaGap, setWalkCurve, setWalkDepth, setDensity, setRadius, setAnimDur } from './settings.js';
 import { initGestures, toggleImmersive, exitImmersive } from './gestures.js';
@@ -132,12 +132,39 @@ window.setSystemChime = (v) => {
 };
 
 // ── Атмосферний арт розділу ──────────────────────────────────────────────────
-// Джерело: /illustrations/{bookId}/{epubChIdx}.webp (згенеровані наперед); поки
-// арту нема — фолбек на обкладинку книги. Так механізм працює вже, а підміна на
-// реальні картинки = просто поява файлів на сервері.
+// Джерело: /illustrations/{bookId}/{epubChIdx}.webp (згенеровані наперед).
+// Обкладинка не є chapter-art: без реального арту фон лишається чистим.
 let _artSplashTimer = null;
-function _chapterArtUrl(epubChIdx) {
-  return `/illustrations/${state.bookId}/${epubChIdx}.webp`;
+function _chapterArtKey(epubChIdx) {
+  const href = state.epubChapters?.[epubChIdx]?.htmlFile || '';
+  const file = href.split('/').pop() || '';
+  const stem = file.replace(/\.[^.]+$/, '');
+  return stem || String(epubChIdx);
+}
+function _chapterArtUrl(epubChIdx, variant = 'hero', key = _chapterArtKey(epubChIdx)) {
+  const suffix = variant === 'background' ? '-bg' : '';
+  return `/illustrations/${state.bookId}/${key}${suffix}.webp`;
+}
+function _chapterArtCandidates(epubChIdx, variant = 'hero') {
+  const keys = [];
+  const primary = _chapterArtKey(epubChIdx);
+  if (primary) keys.push(primary);
+  const numeric = String(epubChIdx);
+  if (numeric && !keys.includes(numeric)) keys.push(numeric);
+  return keys.map(key => _chapterArtUrl(epubChIdx, variant, key));
+}
+function _preloadFirst(urls, ok, fail) {
+  const queue = Array.isArray(urls) ? urls.filter(Boolean) : [urls].filter(Boolean);
+  if (!queue.length) { fail?.(); return; }
+  const tryAt = (idx) => {
+    if (idx >= queue.length) { fail?.(); return; }
+    const url = queue[idx];
+    const img = new Image();
+    img.onload = () => ok(url);
+    img.onerror = () => tryAt(idx + 1);
+    img.src = url;
+  };
+  tryAt(0);
 }
 window.updateChapterArt = (epubChIdx, opts = {}) => {
   const mode = state.chapterArt || 0;
@@ -145,20 +172,20 @@ window.updateChapterArt = (epubChIdx, opts = {}) => {
   if (!bg) return;
   if (!mode || !state.bookId) { bg.classList.remove('has-art'); return; }
 
-  const apply = (url) => {
-    bg.style.backgroundImage = `url("${url}")`;
+  const heroUrls = _chapterArtCandidates(epubChIdx, 'hero');
+  const ambientUrls = _chapterArtCandidates(epubChIdx, 'background');
+  const apply = (backgroundUrl, splashUrl = backgroundUrl) => {
+    bg.style.backgroundImage = `url("${backgroundUrl}")`;
     bg.classList.add('has-art');
-    if (mode >= 2 && opts.splash !== false) _showArtSplash(url, opts.title);
+    if (mode >= 2 && opts.splash !== false) _showArtSplash(splashUrl, opts.title);
   };
-  // Спробувати арт розділу; якщо нема — обкладинку.
-  const img = new Image();
-  img.onload = () => { apply(_chapterArtUrl(epubChIdx)); _prefetchChapterArt(epubChIdx); };
-  img.onerror = () => {
-    const cover = getBookCoverUrl(state.bookId);
-    if (cover) apply(cover); else bg.classList.remove('has-art');
-    _prefetchChapterArt(epubChIdx);
-  };
-  img.src = _chapterArtUrl(epubChIdx);
+
+  // Пріоритет: окремий ambient-фон -> hero-арт. Не підміняємо сцену обкладинкою.
+  _preloadFirst(
+    ambientUrls,
+    (ambientUrl) => _preloadFirst(heroUrls, (heroUrl) => apply(ambientUrl, heroUrl), () => apply(ambientUrl)),
+    () => _preloadFirst(heroUrls, (heroUrl) => apply(heroUrl), () => bg.classList.remove('has-art'))
+  );
 };
 function _showArtSplash(url, title) {
   const sp = document.getElementById('chapter-art-splash');
@@ -169,17 +196,6 @@ function _showArtSplash(url, title) {
   if (_artSplashTimer) clearTimeout(_artSplashTimer);
   _artSplashTimer = setTimeout(() => sp.classList.remove('show'), 4800);
 }
-function _prefetchChapterArt(fromEpubIdx, n = 3) {
-  if (localStorage.getItem('st_art_prefetch') === '0') return;
-  if (!state.chapterArt || !state.bookId || !state.chapters?.length) return;
-  const maxIdx = state.chapters.reduce((m, c) => Math.max(m, c.epubChapterIdx ?? 0), 0);
-  for (let i = 1; i <= n; i++) {
-    const idx = fromEpubIdx + i;
-    if (idx > maxIdx) break;
-    new Image().src = _chapterArtUrl(idx);
-  }
-}
-
 // 0 = вимк, 1 = фон, 2 = фон+заставка
 window.setChapterArt = (v) => {
   state.chapterArt = Number(v) || 0;
@@ -511,12 +527,6 @@ function setupEventListeners() {
     'set-system-color':   (el) => setSystemColor(el.dataset.color),
     'set-system-chime':   (el) => window.setSystemChime?.(el.dataset.value),
     'set-chapter-art':    (el) => window.setChapterArt?.(el.dataset.value),
-    'set-art-prefetch':   (el) => {
-      const on = el.dataset.value === '1';
-      try { localStorage.setItem('st_art_prefetch', on ? '1' : '0'); } catch (_) {}
-      document.querySelectorAll('#art-prefetch-seg .seg-btn').forEach(b =>
-        b.classList.toggle('active', b.dataset.value === el.dataset.value));
-    },
     'mark-finished':      () => markBookFinished(),
     'reset-progress':     () => resetBookProgress(),
     'export-data':        () => exportAllData(),
@@ -530,7 +540,6 @@ function setupEventListeners() {
     // Walk overlay (task 03)
     'confirm-walk-bookmark':   () => confirmWalkBookmark(),
     'dismiss-walk-bookmark':   () => dismissWalkBookmarkConfirm(),
-    // Overflow verifier (task 03)
     'open-syslog-and-close':   () => { window.openSystemLog?.(); toggleOverflowMenu(); },
     'syslog-tab-events':       () => window.switchSyslogTab?.('events'),
     'syslog-tab-character':    () => window.switchSyslogTab?.('character'),
@@ -541,6 +550,12 @@ function setupEventListeners() {
     'dossier-toggle-timeline': () => { const t = document.getElementById('dossier-timeline'); if (t) t.hidden = !t.hidden; },
     'open-dossier-from-popup': (el) => { window.openCharDossier?.(el.dataset.key); hideWordPopup(); },
     'open-stats-and-close':    () => { window.openStats?.(); toggleOverflowMenu(); },
+    'open-verifier-and-close': () => { uiOpenPanel('verifier-panel'); runVerifier(); toggleOverflowMenu(); },
+    'rerun-verifier':          () => { uiOpenPanel('verifier-panel'); runVerifier(); },
+    // Word popup (task 03)
+    'hide-word-popup': () => hideWordPopup(),
+    'add-popup-word':  () => addPopupWord(),
+    // Overflow verifier (task 03)
     'open-verifier-and-close': () => { uiOpenPanel('verifier-panel'); runVerifier(); toggleOverflowMenu(); },
     'rerun-verifier':          () => { uiOpenPanel('verifier-panel'); runVerifier(); },
     // Word popup (task 03)
@@ -978,96 +993,209 @@ function renderStats() {
       }
     });
   }
-
-  // ── Gamification: treadmill distance ─────────────────────────────────────
-  const PACE_KMH = 5.0;
-  const totalKm = (totalSec * PACE_KMH / 3600);
-  const todayKm = (todaySec * PACE_KMH / 3600);
-  if (totalSec > 0) {
-    const MILESTONES = [
-      { km: 1, icon: '🥇', name: 'Перший кілометр' },
-      { km: 5, icon: '🏃', name: 'П\'ять кілометрів' },
-      { km: 10, icon: '💪', name: 'Десять кілометрів' },
-      { km: 21.1, icon: '🎽', name: 'Напівмарафон' },
-      { km: 42.2, icon: '🏆', name: 'Марафон' },
-      { km: 100, icon: '⚡', name: '100 кілометрів' },
-      { km: 200, icon: '🌟', name: '200 кілометрів' },
-    ];
-    const achieved = new Set(JSON.parse(localStorage.getItem('st_milestones') || '[]'));
-    const milestonesHtml = MILESTONES.map(m => {
-      const done = totalKm >= m.km || achieved.has(m.km);
-      const remaining = m.km - totalKm;
-      const sub = done ? `${m.km < 10 ? m.km.toFixed(1) : Math.round(m.km)} км` : `ще ${remaining < 1 ? (remaining * 1000).toFixed(0) + ' м' : remaining.toFixed(1) + ' км'}`;
-      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);opacity:${done ? '1' : '0.35'}">
-        <span style="font-size:20px;width:28px;text-align:center">${m.icon}</span>
-        <div><div style="font-size:13px;color:#c4b8a0">${m.name}</div><div style="font-size:11px;color:#8a7a60">${sub}</div></div>
-        ${done ? '<span style="margin-left:auto;font-size:10px;background:#241d0f;border:1px solid rgba(212,175,55,.25);border-radius:10px;padding:2px 7px;color:#d8a24a">✓</span>' : ''}
-      </div>`;
-    }).join('');
-    el.innerHTML += `
-      <div style="margin-top:1.2rem;padding:0 0 .5rem;border-top:1px solid rgba(255,255,255,.06);">
-        <div style="font-size:11px;color:#5a5040;text-transform:uppercase;letter-spacing:.06em;padding:.75rem 0 .5rem">Доріжка</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:1rem">
-          <div class="stats-card"><div class="stats-val">${todayKm.toFixed(1)}</div><div class="stats-lbl">км сьогодні</div></div>
-          <div class="stats-card"><div class="stats-val">${totalKm < 100 ? totalKm.toFixed(1) : Math.round(totalKm)}</div><div class="stats-lbl">км всього</div></div>
-          <div class="stats-card"><div class="stats-val">${Math.round(totalKm * 1000 / 0.762)}</div><div class="stats-lbl">кроків</div></div>
-        </div>
-        ${milestonesHtml}
-      </div>`;
-  }
 }
 
-// ── Gamification helpers ───────────────────────────────────────────────────
+/**
+ * Save current progress
+ */
+// force=true — обійти 10с-тротлінг і ОДРАЗУ штовхнути позицію на сервер. Викликати
+// на межах сесії (пауза / згортання / вихід із книги), інакше остання позиція
+// лишалась тільки в localStorage цього пристрою й не синхронізувалась на інший.
+function saveProgress(force = false) {
+  if (!state.bookId || !_audioElement) return;
 
-function _walkKm(seconds) { return seconds * 5.0 / 3600; }
+  const ac = state.audioChapters[state.currentAudioChIdx];
+  const absTime = (ac && ac.startTime != null) ? (ac.startTime + _audioElement.currentTime) : _audioElement.currentTime;
 
-function _updateWalkDistChip() {
-  const chip = document.getElementById('walk-dist-chip');
-  const span = document.getElementById('walk-dist-today');
-  if (!chip || !span) return;
-  const today = new Date().toISOString().slice(0, 10);
-  const todaySec = state.dailyReadingTime?.[today] || parseInt(localStorage.getItem('reading_time_' + today) || '0');
-  const km = _walkKm(todaySec);
-  if (km >= 0.1) {
-    span.textContent = km.toFixed(1);
-    chip.classList.add('has-distance');
-  } else {
-    chip.classList.remove('has-distance');
-  }
-}
+  const progressData = {
+    absTime,
+    chapterIdx: state.currentChapterIdx,
+    sentenceIdx: state.activeIdx,
+    totalDuration: state.totalDuration,
+    savedAt: Date.now()
+  };
 
-function _checkMilestones() {
-  const THRESHOLDS = [1, 5, 10, 21.1, 42.2, 100, 200];
-  const LABELS = { 1: '🥇 Перший кілометр!', 5: '🏃 5 км пройдено!', 10: '💪 10 км!',
-    21.1: '🎽 Напівмарафон — 21 км!', 42.2: '🏆 Марафон — 42 км!', 100: '⚡ 100 км!', 200: '🌟 200 км!' };
-  const totalSec = state.totalReadingTime || parseInt(localStorage.getItem('total_reading_time') || '0');
-  const totalKm = _walkKm(totalSec);
-  const achieved = new Set(JSON.parse(localStorage.getItem('st_milestones') || '[]'));
-  let newAchieved = false;
-  for (const t of THRESHOLDS) {
-    if (totalKm >= t && !achieved.has(t)) {
-      achieved.add(t);
-      newAchieved = true;
-      showToast(LABELS[t]);
+  saveBookProgress(state.bookId, progressData);
+
+  // Also save to server (throttled, unless forced)
+  if (ac) {
+    const now = Date.now();
+    if (force || !state._lastServerSave || now - state._lastServerSave > 10000) {
+      state._lastServerSave = now;
+      serverSaveProgress(state.bookId, absTime, state.totalDuration, ac.href || '');
     }
   }
-  if (newAchieved) {
-    try { localStorage.setItem('st_milestones', JSON.stringify([...achieved])); } catch (_) {}
-  }
 }
 
-// Called from audio.js after saveReadingTime
-window.onWalkTimeSaved = () => {
-  _updateWalkDistChip();
-  _checkMilestones();
-};
+/**
+ * Update sentence progress bar
+ */
+export function updateSentenceProgress() {
+  const chapterTime = _audioElement.currentTime;
 
-// ── System Log ─────────────────────────────────────────────────────────────
+  // Walking mode: block detection at 30fps + word highlighting
+  if (state.mode === 'walking' && state.walkingBlocks?.length) {
+    const t = chapterTime;
+    const blocks = state.walkingBlocks;
+    let lo = 0, hi = blocks.length - 1, found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (blocks[mid].clipBegin <= t) { found = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    if (found >= 0 && found !== state.activeBlockIdx && !window._blockNavCooldown) {
+      if (window._renderWalkingBlocksFn) window._renderWalkingBlocksFn(found, true);
+    }
+    updateActiveWord();
+    return;
+  }
 
-// ── System Log v7 — bullet-proof parse + proactive index + char sheet ────
-// v4: max_tokens 300 truncated heavy chapters → []. v5/v6 fixed tokens.
-// v7: robust JSON parse (greedy, fence-strip), retry transient errors,
-//     proactive background sweep on book open, "Character" tab.
+  const activeEl = document.querySelector('.text-sentence.active, .text-chunk.active');
+  if (!activeEl || state.activeIdx < 0 || state.activeIdx >= state.sentences.length) return;
+
+  updateActiveWord();
+}
+
+/**
+ * Update active word highlight (runs at ~30fps via rAF)
+ * Pure timestamp-based — maps Whisper word index to DOM word index
+ */
+export function updateActiveWord() {
+  if (!_audioElement) return;
+  const t = Math.max(0, _audioElement.currentTime - 0.25);
+  const tl = state.wordTimeline;
+  if (!tl?.length) return;
+
+  let clipBegin, clipEnd, activeEl, wordOffset = 0;
+
+  if (state.mode === 'walking' && state.walkingBlocks?.length) {
+    const bidx = state.activeBlockIdx;
+    if (bidx < 0 || bidx >= state.walkingBlocks.length) return;
+    const blk = state.walkingBlocks[bidx];
+    clipBegin = blk.clipBegin;
+    clipEnd = blk.clipEnd;
+    activeEl = document.querySelector('.walk-line.walk-line-active');
+    if (!activeEl) return;
+  } else {
+    const sid = state.activeIdx;
+    if (sid < 0 || sid >= state.sentences.length) return;
+    const s = state.sentences[sid];
+    if (!s || s.clipBegin == null || s.clipEnd == null) return;
+    clipBegin = s.clipBegin;
+    clipEnd = s.clipEnd;
+    activeEl = document.getElementById(`s${sid}`);
+    if (!activeEl) return;
+
+    // Chunk-mode word offset for reading mode
+    if (activeEl.classList.contains('text-chunk')) {
+      const elId = parseInt(activeEl.id.replace('s', ''), 10);
+      if (!isNaN(elId)) {
+        for (let i = elId; i < sid; i++) {
+          const sen = state.sentences[i];
+          if (sen) wordOffset += sen.text.split(/\s+/).filter(Boolean).length;
+        }
+      }
+    }
+  }
+
+  if (!activeEl) return;
+  const words = activeEl.querySelectorAll('.word');
+  if (!words.length) return;
+
+  // Collect Whisper words for this block/sentence
+  const rangeWords = [];
+  for (let i = 0; i < tl.length; i++) {
+    if (tl[i].startTime < clipBegin - 0.1) continue;
+    if (tl[i].startTime > clipEnd + 0.1) break;
+    rangeWords.push(tl[i]);
+  }
+  if (!rangeWords.length) return;
+
+  let activeWordIdx = -1;
+  for (let i = 0; i < rangeWords.length; i++) {
+    if (t >= rangeWords[i].startTime && t <= rangeWords[i].endTime) {
+      activeWordIdx = i;
+      break;
+    }
+  }
+  if (activeWordIdx < 0) {
+    for (let i = rangeWords.length - 1; i >= 0; i--) {
+      if (rangeWords[i].startTime <= t) {
+        activeWordIdx = i;
+        break;
+      }
+    }
+  }
+  if (activeWordIdx < 0) return;
+
+  // Route through the state machine: setActiveSentence wipes the outgoing
+  // sentence's word state (active + past) the moment the sentence changes.
+  setActiveSentence(activeEl);
+
+  // 'past' dimming is per-word within the active sentence; the accent '.active'
+  // highlight goes through the single word tracker (setActiveWord).
+  let targetWord = null;
+  words.forEach((el, i) => {
+    const rel = i - wordOffset;
+    if (rel === activeWordIdx) targetWord = el;
+    el.classList.toggle('past', rel >= 0 && rel < activeWordIdx);
+  });
+  const wordChanged = targetWord && targetWord !== _activeWordEl;
+  setActiveWord(targetWord);
+
+  if (wordChanged && state.mode === 'reading') {
+    window._syncPageToSentence?.(targetWord);
+  }
+
+  // NOTE: reading mode no longer does a per-word scrollLeft here. The page is
+  // positioned by transform on #text-inner (pagination), and the active word's
+  // PAGE is followed via _snapToActive. A native scrollLeft on #text-content
+  // (which is overflow:hidden but still programmatically scrollable because the
+  // columns overflow it) used to fight the transform: a word near the right edge
+  // tripped scrollTo, shifting the text into a half-page "clipped both sides"
+  // state that persisted until the next page turn reset scrollLeft to 0. Removed.
+}
+
+// Store implementation reference
+window._renderTextImpl = renderText;
+window._showBookInfoImpl = showBookInfoImplementation;
+
+function showBookInfoImplementation() {
+  if (!state.currentBook) return;
+
+  const b = state.currentBook;
+  const id = b.uuid || b.id;
+  const coverUrl = id ? getBookCoverUrl(id) : '';
+  const totalCh = state.chapters.length;
+  const totalWords = state.epubChapters.reduce((sum, ec) =>
+    sum + (ec.sentences ? ec.sentences.reduce((s2, sen) => s2 + sen.text.split(/\s+/).filter(Boolean).length, 0) : 0), 0
+  );
+
+  const content = document.getElementById('bookinfo-content');
+  if (!content) return;
+
+  content.innerHTML = `
+    <div style="display:flex;gap:1rem;align-items:start;margin-bottom:1rem;">
+      ${coverUrl ?
+        `<img src="${coverUrl}&token=${encodeURIComponent(state.token)}" alt="Обкладинка" style="width:100px;height:140px;object-fit:cover;border-radius:8px;flex-shrink:0;" onerror="this.outerHTML='<div style=\\'width:100px;height:140px;border-radius:8px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:2.5rem;flex-shrink:0;\\'>📖</div>'">` :
+        '<div style="width:100px;height:140px;border-radius:8px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:2.5rem;flex-shrink:0;">📖</div>'
+      }
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:1.1rem;font-weight:600;color:var(--text);">${esc(b.title || b.name)}</div>
+        <div style="font-size:0.85rem;color:var(--text-muted);margin-top:0.25rem;">${esc(getAuthorName(b))}</div>
+        ${b.series ? `<div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.2rem;">📚 ${esc(typeof b.series === 'string' ? b.series : b.series.name || b.series.title || '')}</div>` : ''}
+        <div style="display:flex;gap:1rem;margin-top:0.6rem;font-size:0.8rem;color:var(--text-dim);">
+          <span>📄 ${totalCh} розділів</span>
+          <span>📝 ${totalWords.toLocaleString()} слів</span>
+          <span>⏱ ${state.totalDuration ? fmtTime(state.totalDuration) : '—'}</span>
+        </div>
+      </div>
+    </div>
+    ${b.synopsis || b.description ? `<div style="font-size:0.88rem;color:var(--text-muted);line-height:1.6;padding-top:0.75rem;border-top:1px solid var(--border);">${esc(b.synopsis || b.description)}</div>` : ''}
+  `;
+
+  uiOpenPanel('bookinfo-panel');
+}
 
 const _SYSLOG_KEY = (ci) => `st_syslog_v7_${state.bookId}_${ci}`;
 
@@ -1807,206 +1935,6 @@ window.openChars = () => {
 window.openCharDossier = (key) => { _openDossier(key); uiOpenPanel('chars-panel'); };
 window.charsBackToList = () => _renderCharsList();
 
-/**
- * Save current progress
- */
-// force=true — обійти 10с-тротлінг і ОДРАЗУ штовхнути позицію на сервер. Викликати
-// на межах сесії (пауза / згортання / вихід із книги), інакше остання позиція
-// лишалась тільки в localStorage цього пристрою й не синхронізувалась на інший.
-function saveProgress(force = false) {
-  if (!state.bookId || !_audioElement) return;
-
-  const ac = state.audioChapters[state.currentAudioChIdx];
-  const absTime = (ac && ac.startTime != null) ? (ac.startTime + _audioElement.currentTime) : _audioElement.currentTime;
-
-  const progressData = {
-    absTime,
-    chapterIdx: state.currentChapterIdx,
-    sentenceIdx: state.activeIdx,
-    totalDuration: state.totalDuration,
-    savedAt: Date.now()
-  };
-
-  saveBookProgress(state.bookId, progressData);
-
-  // Also save to server (throttled, unless forced)
-  if (ac) {
-    const now = Date.now();
-    if (force || !state._lastServerSave || now - state._lastServerSave > 10000) {
-      state._lastServerSave = now;
-      serverSaveProgress(state.bookId, absTime, state.totalDuration, ac.href || '');
-    }
-  }
-}
-
-/**
- * Update sentence progress bar
- */
-export function updateSentenceProgress() {
-  const chapterTime = _audioElement.currentTime;
-
-  // Walking mode: block detection at 30fps + word highlighting
-  if (state.mode === 'walking' && state.walkingBlocks?.length) {
-    const t = chapterTime;
-    const blocks = state.walkingBlocks;
-    let lo = 0, hi = blocks.length - 1, found = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (blocks[mid].clipBegin <= t) { found = mid; lo = mid + 1; }
-      else hi = mid - 1;
-    }
-    if (found >= 0 && found !== state.activeBlockIdx && !window._blockNavCooldown) {
-      if (window._renderWalkingBlocksFn) window._renderWalkingBlocksFn(found, true);
-    }
-    updateActiveWord();
-    return;
-  }
-
-  // Continuously re-validate page position — corrects stale translateX within one frame.
-  window.restorePageBySentence?.(false);
-
-  const activeEl = document.querySelector('.text-sentence.active, .text-chunk.active');
-  if (!activeEl || state.activeIdx < 0 || state.activeIdx >= state.sentences.length) return;
-
-  updateActiveWord();
-}
-
-/**
- * Update active word highlight (runs at ~30fps via rAF)
- * Pure timestamp-based — maps Whisper word index to DOM word index
- */
-export function updateActiveWord() {
-  if (!_audioElement) return;
-  const t = Math.max(0, _audioElement.currentTime - 0.25);
-  const tl = state.wordTimeline;
-  if (!tl?.length) return;
-
-  let clipBegin, clipEnd, activeEl, wordOffset = 0;
-
-  if (state.mode === 'walking' && state.walkingBlocks?.length) {
-    const bidx = state.activeBlockIdx;
-    if (bidx < 0 || bidx >= state.walkingBlocks.length) return;
-    const blk = state.walkingBlocks[bidx];
-    clipBegin = blk.clipBegin;
-    clipEnd = blk.clipEnd;
-    activeEl = document.querySelector('.walk-line.walk-line-active');
-    if (!activeEl) return;
-  } else {
-    const sid = state.activeIdx;
-    if (sid < 0 || sid >= state.sentences.length) return;
-    const s = state.sentences[sid];
-    if (!s || s.clipBegin == null || s.clipEnd == null) return;
-    clipBegin = s.clipBegin;
-    clipEnd = s.clipEnd;
-    activeEl = document.getElementById(`s${sid}`);
-    if (!activeEl) return;
-
-    // Chunk-mode word offset for reading mode
-    if (activeEl.classList.contains('text-chunk')) {
-      const elId = parseInt(activeEl.id.replace('s', ''), 10);
-      if (!isNaN(elId)) {
-        for (let i = elId; i < sid; i++) {
-          const sen = state.sentences[i];
-          if (sen) wordOffset += sen.text.split(/\s+/).filter(Boolean).length;
-        }
-      }
-    }
-  }
-
-  if (!activeEl) return;
-  const words = activeEl.querySelectorAll('.word');
-  if (!words.length) return;
-
-  // Collect Whisper words for this block/sentence
-  const rangeWords = [];
-  for (let i = 0; i < tl.length; i++) {
-    if (tl[i].startTime < clipBegin - 0.1) continue;
-    if (tl[i].startTime > clipEnd + 0.1) break;
-    rangeWords.push(tl[i]);
-  }
-  if (!rangeWords.length) return;
-
-  let activeWordIdx = -1;
-  for (let i = 0; i < rangeWords.length; i++) {
-    if (t >= rangeWords[i].startTime && t <= rangeWords[i].endTime) {
-      activeWordIdx = i;
-      break;
-    }
-  }
-  if (activeWordIdx < 0) {
-    for (let i = rangeWords.length - 1; i >= 0; i--) {
-      if (rangeWords[i].startTime <= t) {
-        activeWordIdx = i;
-        break;
-      }
-    }
-  }
-  if (activeWordIdx < 0) return;
-
-  // Route through the state machine: setActiveSentence wipes the outgoing
-  // sentence's word state (active + past) the moment the sentence changes.
-  setActiveSentence(activeEl);
-
-  // 'past' dimming is per-word within the active sentence; the accent '.active'
-  // highlight goes through the single word tracker (setActiveWord).
-  let targetWord = null;
-  words.forEach((el, i) => {
-    const rel = i - wordOffset;
-    if (rel === activeWordIdx) targetWord = el;
-    el.classList.toggle('past', rel >= 0 && rel < activeWordIdx);
-  });
-  setActiveWord(targetWord);
-
-  // NOTE: reading mode no longer does a per-word scrollLeft here. The page is
-  // positioned by transform on #text-inner (pagination), and the active word's
-  // PAGE is followed via _snapToActive. A native scrollLeft on #text-content
-  // (which is overflow:hidden but still programmatically scrollable because the
-  // columns overflow it) used to fight the transform: a word near the right edge
-  // tripped scrollTo, shifting the text into a half-page "clipped both sides"
-  // state that persisted until the next page turn reset scrollLeft to 0. Removed.
-}
-
-// Store implementation reference
-window._renderTextImpl = renderText;
-window._showBookInfoImpl = showBookInfoImplementation;
-
-function showBookInfoImplementation() {
-  if (!state.currentBook) return;
-
-  const b = state.currentBook;
-  const id = b.uuid || b.id;
-  const coverUrl = id ? getBookCoverUrl(id) : '';
-  const totalCh = state.chapters.length;
-  const totalWords = state.epubChapters.reduce((sum, ec) =>
-    sum + (ec.sentences ? ec.sentences.reduce((s2, sen) => s2 + sen.text.split(/\s+/).filter(Boolean).length, 0) : 0), 0
-  );
-
-  const content = document.getElementById('bookinfo-content');
-  if (!content) return;
-
-  content.innerHTML = `
-    <div style="display:flex;gap:1rem;align-items:start;margin-bottom:1rem;">
-      ${coverUrl ?
-        `<img src="${coverUrl}&token=${encodeURIComponent(state.token)}" alt="Обкладинка" style="width:100px;height:140px;object-fit:cover;border-radius:8px;flex-shrink:0;" onerror="this.outerHTML='<div style=\\'width:100px;height:140px;border-radius:8px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:2.5rem;flex-shrink:0;\\'>📖</div>'">` :
-        '<div style="width:100px;height:140px;border-radius:8px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:2.5rem;flex-shrink:0;">📖</div>'
-      }
-      <div style="flex:1;min-width:0;">
-        <div style="font-size:1.1rem;font-weight:600;color:var(--text);">${esc(b.title || b.name)}</div>
-        <div style="font-size:0.85rem;color:var(--text-muted);margin-top:0.25rem;">${esc(getAuthorName(b))}</div>
-        ${b.series ? `<div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.2rem;">📚 ${esc(typeof b.series === 'string' ? b.series : b.series.name || b.series.title || '')}</div>` : ''}
-        <div style="display:flex;gap:1rem;margin-top:0.6rem;font-size:0.8rem;color:var(--text-dim);">
-          <span>📄 ${totalCh} розділів</span>
-          <span>📝 ${totalWords.toLocaleString()} слів</span>
-          <span>⏱ ${state.totalDuration ? fmtTime(state.totalDuration) : '—'}</span>
-        </div>
-      </div>
-    </div>
-    ${b.synopsis || b.description ? `<div style="font-size:0.88rem;color:var(--text-muted);line-height:1.6;padding-top:0.75rem;border-top:1px solid var(--border);">${esc(b.synopsis || b.description)}</div>` : ''}
-  `;
-
-  uiOpenPanel('bookinfo-panel');
-}
-
 // Show word popup for translation
 function showWordPopup(word, x, y) {
   hideWordPopup();
@@ -2042,18 +1970,6 @@ function showWordPopup(word, x, y) {
   popup.style.left = Math.min(x, window.innerWidth - 310) + 'px';
   popup.style.top = Math.min(y, window.innerHeight - 160) + 'px';
   popup.classList.add('show');
-
-  // Dossier bonus: if the tapped word is a known character name, offer "👤 Досьє"
-  const dossierBtn = document.getElementById('popup-dossier-btn');
-  if (dossierBtn) {
-    dossierBtn.hidden = true;
-    const w = word.toLowerCase().trim();
-    if (w.length >= 3 && state.bookId) {
-      const hit = _buildCharRegistry(state.currentChapterIdx).find(c =>
-        [c.name, ...c.aliases].some(n => n.toLowerCase().split(/[^a-z0-9]+/).includes(w)));
-      if (hit) { dossierBtn.hidden = false; dossierBtn.dataset.key = hit.key; }
-    }
-  }
 
   // Call translation API
   const systemPrompt = 'Ти — професійний літературний перекладач з англійської на українську. Перекладай чистою літературною українською мовою, уникаючи суржику, русизмів, кальок з російської та канцеляризмів.';
@@ -2145,3 +2061,4 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+

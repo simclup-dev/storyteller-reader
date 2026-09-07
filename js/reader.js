@@ -14,13 +14,13 @@ import {
   loadProgressFromServer,
   authHdr
 } from './http.js';
-import { cacheEpub, getCachedEpub, loadProgress, cacheAudio, getCachedAudio, clearBookCache, getCachedChapters } from './storage.js';
+import { cacheEpub, getCachedEpub, loadProgress, cacheAudio, getCachedAudio, clearBookCache, getCachedChapters, invalidateAudioCacheIfNeeded } from './storage.js';
 import { parseEpub, parseSmil, matchEpubChaptersToAudio, invalidateEpubCacheIfNeeded } from './epub.js';
 import { loadAudioChapter, setActive, onTimeUpdate, onAudioPlay, onAudioPause } from './audio.js';
 import { renderChapters as renderChaptersPanel, updateBookmarkBtn, renderBookmarkDots } from './panels.js';
 import { show, applyModeClass } from './ui.js';
 import { buildSpeedSlider } from './settings.js';
-import { WALK_CURVES } from './constants.js';
+import { WALK_CURVES, DEFAULT_FONT_SIZE } from './constants.js';
 import { attachGestures, attachWalkingGestures } from './gestures.js';
 import { openTranslate } from './translate.js';
 import { toggleBookmark } from './panels.js';
@@ -93,6 +93,12 @@ getBookAssetFolder(state.bookId).then(folder => {
 
   buildSpeedSlider();
   applyModeClass();
+  // `setMode()` restores the walk font, but a book can open directly into the
+  // persisted walking mode and bypass that path. Apply the same state now so
+  // the first layout never renders with the CSS fallback (21px).
+  if (state.mode === 'walking') {
+    document.documentElement.style.setProperty('--font-size', (state.fontSize || DEFAULT_FONT_SIZE) + 'px');
+  }
   // Якщо книга відкривається ОДРАЗУ в walk — навісити тап-жести (play/pause).
   // Раніше це робив лише setMode (перехід reading→walk), тож прямий старт у walk
   // лишав текст без обробника тапа («тап нічого не робить»).
@@ -103,6 +109,7 @@ getBookAssetFolder(state.bookId).then(folder => {
     if (state.bookId !== bookId) return;
 
     invalidateEpubCacheIfNeeded();
+    await invalidateAudioCacheIfNeeded();
 
     let blob = await getCachedEpub(bookId);
     if (!blob) {
@@ -241,6 +248,7 @@ const _JSZIP_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.mi
 async function _prepareBookData(bookId) {
   await loadScript(_JSZIP_URL);
   invalidateEpubCacheIfNeeded();
+  await invalidateAudioCacheIfNeeded();
   let blob = await getCachedEpub(bookId);
   if (!blob) {
     blob = await getEpubBlob(bookId);
@@ -278,18 +286,18 @@ export async function downloadBookOffline(bookId, onProgress) {
       const ec = state.epubChapters[ch.epubChapterIdx];
       const ac = ec && ec.audioChapterIdx >= 0 ? state.audioChapters[ec.audioChapterIdx] : null;
       const href = ac ? ((ec.primaryHref && ec.primaryHref !== ac.href) ? ec.primaryHref : ac.href) : null;
-      return { epubChIdx: ch.epubChapterIdx, href };
+      return { epubChIdx: ch.epubChapterIdx, href, duration: ac?.duration || 0 };
     }).filter(x => x.href);
 
     const total = items.length;
     let done = 0;
     onProgress?.(done, total);
     for (const it of items) {
-      const cached = await getCachedAudio(bookId, it.epubChIdx);
+      const cached = await getCachedAudio(bookId, it.epubChIdx, it.href, it.duration);
       if (!cached) {
         try {
           const res = await fetch(getAudioUrl(bookId, it.href), { headers: authHdr() });
-          if (res.ok) await cacheAudio(bookId, it.epubChIdx, await res.blob());
+          if (res.ok) await cacheAudio(bookId, it.epubChIdx, await res.blob(), it.href, it.duration);
         } catch (_) { /* пропустити розділ, не валити всю книгу */ }
       }
       done++;
@@ -377,6 +385,7 @@ export function loadChapter(epubChIdx, autoplay = true, startAtOverride = undefi
   state.sentences = ec.sentences;
   state.activeIdx = -1;
   state.activeBlockIdx = -1;
+  state._systemPageHold = null;
   state.fallbackTried = false;
   state._prefetching = false;
   state._walkingBlocksBuilt = false;
@@ -419,7 +428,16 @@ export function loadChapter(epubChIdx, autoplay = true, startAtOverride = undefi
   if (audioChIdx >= 0) {
     loadAudioChapter(audioChIdx, startAt, autoplay, epubChIdx);
   } else {
+    // No audio matched for this chapter — stop whatever was already loaded/playing
+    // (e.g. the previous chapter's track) so it doesn't keep sounding under the
+    // new chapter's text. Previously the <audio> element was left untouched here.
     state.currentAudioChIdx = -1;
+    const audio = getAudioElement();
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    }
     if (textContent) textContent.classList.remove('loading');
     showToast('⚠️ Немає аудіо для цього розділу');
   }
@@ -437,32 +455,27 @@ export function loadChapter(epubChIdx, autoplay = true, startAtOverride = undefi
 
 /**
  * Build walking blocks by grouping sentences into ~3-6s chunks.
- * Detects dialogue (quote-balanced, per source sentence) and System text (bold EPUB markup).
+ * Detects dialogue at word granularity and System text (bold EPUB markup).
  */
 function buildWalkingBlocks() {
-  // ── Pass 1: compute _isSystem and _isDialogue per source sentence ──────────
-  // Dialogue detection uses quote-parity tracking across DOM order to catch
-  // continuation lines that lack opening quotes (e.g. second paragraph of a reply).
-  // Only DOUBLE quotes mark speech. Single curly ’ is an apostrophe in English
-  // (it's, Carl's, don't) — counting it as a closing quote would corrupt the debt.
-  const OPEN_QUOTES  = /[“«„]/g;     // “ « „
-  const CLOSE_QUOTES = /[”»]/g;      // ” »
-  const ANY_QUOTE    = /[“”«»„"]/;   // incl. straight " for hasQuote (some EPUBs use it)
-  let openQuoteDebt = 0; // >0 means we are inside an unmatched open quote
-  let prevPara = null;   // paragraph key from elId (e.g. "id110-s61" → "id110")
+  // ── Pass 1: compute role masks per source sentence ─────────────────────────
+  // A quoted title in narration (one called “Druids only”) is not dialogue.
+  // A spoken line, however, may be split into several SMIL spans.
+  const quotePairs = { '“': '”', '«': '»', '„': '“', '"': '"' };
+  const speechLead = /\b(?:said|asked|replied|answered|called\s+out|shouted|yelled|whispered|muttered|cried|growled|snapped|added|continued|told\s+(?:him|her|me|us|them)|began|went)\s*[,;:—–-]*\s*$/i;
+  const speakerLabel = /^\s*[\p{Lu}][\p{L}'’.-]*(?:\s+[\p{Lu}][\p{L}'’.-]*){0,3}\s*:\s+\S/u;
+  const dashDialogue = /^\s*[—–]\s*\S/;
+  let openDialogue = null;
+
+  const wordMaskForRanges = (text, ranges) => Array.from(text.matchAll(/\S+/g), word => {
+    const start = word.index;
+    const end = start + word[0].length;
+    return ranges.some(([from, to]) => start < to && end > from);
+  });
 
   for (let si = 0; si < state.sentences.length; si++) {
     const s = state.sentences[si];
     const txt = s.text || '';
-
-    // Reset quote-debt at real paragraph boundaries so one unbalanced quote can't
-    // leak "dialogue" onto the rest of the chapter. Only when the id scheme actually
-    // encodes a paragraph (…-s<N>); otherwise keep pure parity (don't reset).
-    const m = (s.elId || '').match(/^(.*)-s\d+$/);
-    if (m) {
-      if (m[1] !== prevPara) openQuoteDebt = 0;
-      prevPara = m[1];
-    }
 
     // System: from EPUB DOM priming (epub.js sets _isSystem); default false
     const isSys = !!s._isSystem;
@@ -470,14 +483,39 @@ function buildWalkingBlocks() {
 
     if (isSys) {
       s._isDialogue = false;
-      // System blocks don't carry quote debt (they're LitRPG status boxes, not speech)
+      s._dialogueWordMask = [];
+      openDialogue = null;
     } else {
-      const opens  = (txt.match(OPEN_QUOTES)  || []).length;
-      const closes = (txt.match(CLOSE_QUOTES) || []).length;
-      const hasQuote = ANY_QUOTE.test(txt);
-      const inDebt   = openQuoteDebt > 0;
-      s._isDialogue = hasQuote || inDebt;
-      openQuoteDebt = Math.max(0, openQuoteDebt + opens - closes);
+      let ranges = [];
+      if (openDialogue) {
+        // EPUB convention permits one spoken turn to continue in the next
+        // paragraph without repeating the opening quote.  The opening quote
+        // has already passed the strict direct-speech test above, so retain
+        // only that established turn until its matching closing quote.
+        const closeAt = txt.indexOf(openDialogue.closeQuote);
+        ranges = [[0, closeAt < 0 ? txt.length : closeAt + 1]];
+        openDialogue = closeAt < 0 ? openDialogue : null;
+      } else {
+        const firstQuote = /[“«„"]/.exec(txt);
+        if (firstQuote) {
+          const quote = firstQuote[0];
+          const before = txt.slice(0, firstQuote.index);
+          // Direct speech either starts the visible line or follows a speech verb.
+          // Other inline quotes are titles, labels, irony, or citations.
+          if (before.trim() === '' || speechLead.test(before)) {
+            const closeQuote = quotePairs[quote];
+            const closeAt = txt.indexOf(closeQuote, firstQuote.index + 1);
+            ranges = [[firstQuote.index, closeAt < 0 ? txt.length : closeAt + 1]];
+            if (closeAt < 0) openDialogue = { closeQuote, containerKey: s._containerKey };
+          }
+        } else if (dashDialogue.test(txt) || speakerLabel.test(txt)) {
+          // Some EPUBs encode dialogue typographically, not with quotation
+          // marks: an em dash, or an explicit `Speaker: line` label.
+          ranges = [[0, txt.length]];
+        }
+      }
+      s._dialogueWordMask = wordMaskForRanges(txt, ranges);
+      s._isDialogue = s._dialogueWordMask.some(Boolean);
     }
   }
 
@@ -512,11 +550,10 @@ function buildWalkingBlocks() {
     const systemMasks = [];
     for (let k = startIdx; k < j; k++) {
       sentenceIndices.push(k);
-      const isDial = state.sentences[k]._isDialogue;
       const isSys  = state.sentences[k]._isSystem;
       const wordCount = (state.sentences[k].text || '').split(/\s+/).filter(Boolean).length;
       for (let w = 0; w < wordCount; w++) {
-        dialogueMasks.push(isDial);
+        dialogueMasks.push(!!state.sentences[k]._dialogueWordMask?.[w]);
         systemMasks.push(isSys);
       }
     }
@@ -703,7 +740,9 @@ function processReadingHtml(ec) {
     if (!el) continue;
     matchedCount++;
     // System takes priority; dialogue only when not system
-    const cls = s._isSystem ? ' system' : (s._isDialogue ? ' dialogue' : '');
+    // Dialogue is styled per word. A sentence can contain narration around a
+    // short spoken quote, so putting the role on the wrapper would colour it all.
+    const cls = s._isSystem ? ' system' : '';
     el.innerHTML = `<span class="text-sentence${cls}" id="s${i}" data-idx="${i}">${el.innerHTML}</span>`;
     // LitRPG: System = повністю-жирний елемент (детектиться в epub.js) → оформити
     // САМ елемент-абзац як картку статус-вікна (рамка/фон/моно). Інлайн-жирне сюди не
@@ -713,7 +752,7 @@ function processReadingHtml(ec) {
   console.log(`processReadingHtml: ${matchedCount}/${ec.sentences.length} sentences matched via elId`);
 
   // Wrap words in <span class="word"> for audio sync
-  wrapWordsInSpan(doc.body);
+  wrapWordsInSpan(doc.body, ec.sentences);
   const wordCount = doc.body.querySelectorAll('.word').length;
   const sentenceCount = doc.body.querySelectorAll('.text-sentence').length;
   const imgCount = doc.body.querySelectorAll('img').length;
@@ -725,8 +764,11 @@ function processReadingHtml(ec) {
   return doc.body.innerHTML;
 }
 
-function wrapWordsInSpan(root) {
+function wrapWordsInSpan(root, sentences = []) {
   root.querySelectorAll('.text-sentence').forEach(sen => {
+    const sentence = sentences[Number(sen.dataset.idx)];
+    const dialogueMask = sentence?._dialogueWordMask || [];
+    let wordIdx = 0;
     const walker = document.createTreeWalker(sen, NodeFilter.SHOW_TEXT, null, false);
     const textNodes = [];
     let node;
@@ -742,9 +784,10 @@ function wrapWordsInSpan(root) {
           hasWord = true;
           const span = document.createElement('span');
           span.className = sen.classList.contains('system') ? 'word system'
-            : sen.classList.contains('dialogue') ? 'word dialogue' : 'word';
+            : dialogueMask[wordIdx] ? 'word dialogue' : 'word';
           span.textContent = part;
           frag.appendChild(span);
+          wordIdx++;
         }
       }
       if (hasWord) node.parentNode.replaceChild(frag, node);
@@ -819,7 +862,15 @@ export function renderText(scrollToTop = true, startBlockIdx) {
     // so no separate measure step is needed here.
     document.fonts.ready.then(() => {
       requestAnimationFrame(() => requestAnimationFrame(() => {
+        _indexWordPages();
         _snapToActive(false);
+        inner.querySelectorAll('img').forEach(img => {
+          if (img.complete) return;
+          img.addEventListener('load', () => {
+            _indexWordPages();
+            _snapToActive(false);
+          }, { once: true });
+        });
       }));
     });
 
@@ -1304,6 +1355,7 @@ window.authHdr = () => ({ 'Authorization': `Bearer ${state.token}`, 'Content-Typ
 //     offsetLeft was previously used here but returns column-local x in some browsers.
 
 let _currentPage = 0;
+let _wordPages = new WeakMap();
 
 function _getInner() { return document.getElementById('text-inner'); }
 
@@ -1316,6 +1368,26 @@ function _totalPages(inner, stride) {
   if (!inner || !stride) return 1;
   const gap = parseFloat(getComputedStyle(inner).columnGap) || 0;
   return Math.max(1, Math.round((inner.scrollWidth + gap) / stride));
+}
+
+// Build this only after a stable layout (render, resize, or typography change).
+// Audio follow must never measure an element whose container it is also moving.
+function _indexWordPages() {
+  const inner = _getInner();
+  if (!inner || state.mode !== 'reading') return;
+  const stride = _pageStride(inner);
+  const total = _totalPages(inner, stride);
+  const innerLeft = inner.getBoundingClientRect().left;
+  const pages = new WeakMap();
+  inner.querySelectorAll('.word').forEach(word => {
+    // A word can rarely fragment; its first box is where its audio begins.
+    // Unlike a sentence union rect, this is never a page-wide approximation.
+    const rect = word.getClientRects()[0];
+    if (!rect) return;
+    const page = Math.max(0, Math.min(Math.floor((rect.left - innerLeft) / stride), total - 1));
+    pages.set(word, page);
+  });
+  _wordPages = pages;
 }
 
 function _updatePageNumEl(total) {
@@ -1336,22 +1408,26 @@ function _applyPage(page, animate) {
   _updatePageNumEl(total);
 }
 
-function _snapToActive(animate) {
+function _snapToActive(animate, preferredEl) {
   if (state.mode !== 'reading') return;
   const inner = _getInner();
   if (!inner) return;
   const stride = _pageStride(inner);
   const total  = _totalPages(inner, stride);
   const idx = state.activeIdx >= 0 ? state.activeIdx : 0;
-  const el  = document.querySelector('.word.active') || document.getElementById(`s${idx}`) || document.querySelector('.text-sentence');
+  const el  = (preferredEl && inner.contains(preferredEl) ? preferredEl : null)
+    || document.querySelector('.word.active')
+    || document.getElementById(`s${idx}`)
+    || document.querySelector('.text-sentence');
   if (!el) { _applyPage(0, false); return; }
+  const indexedPage = _wordPages.get(el);
+  if (indexedPage !== undefined) {
+    _applyPage(indexedPage, animate);
+    return;
+  }
+  // Sentence-only fallback is used before word timestamps become available.
   const layoutX = el.getBoundingClientRect().left - inner.getBoundingClientRect().left;
-  const page = Math.max(0, Math.min(Math.floor(layoutX / stride), total - 1));
-  if (page === _currentPage && inner.style.transform === `translateX(${-page * stride}px)`) return;
-  _currentPage = page;
-  inner.style.transition = animate ? 'transform 560ms cubic-bezier(.22,1,.36,1)' : 'none';
-  inner.style.transform  = `translateX(${-page * stride}px)`;
-  _updatePageNumEl(total);
+  _applyPage(Math.max(0, Math.min(Math.floor(layoutX / stride), total - 1)), animate);
 }
 
 export function resetPageState() {
@@ -1374,6 +1450,7 @@ window.turnPage = (dir) => {
   if (state.mode !== 'reading') return;
   const audio = getAudioElement();
   if (audio && !audio.paused) audio.pause();
+  state._systemPageHold = null;
   _applyPage(_currentPage + dir, true);
 };
 
@@ -1382,14 +1459,36 @@ window.updatePageNum = () => _updatePageNumEl();
 // Called from ResizeObserver, settings (font/column changes), and chapter open.
 // pageStride is derived live each call, so just re-snap to the active sentence.
 window.restorePageBySentence = (animate) => {
+  _indexWordPages();
   _snapToActive(animate ?? false);
 };
 
 // Called by audio.js on every new active sentence while playing.
-window._syncPageToSentence = (_el) => {
+function _unverifiedSystemSentenceIdx(el) {
+  if (!state.timelineReady) return -1;
+  const sentenceEl = el?.closest?.('.text-sentence');
+  const idx = Number(sentenceEl?.dataset?.idx);
+  const sentence = Number.isInteger(idx) ? state.sentences[idx] : null;
+  return sentence?._isSystem && sentence._tlStart < 0 ? idx : -1;
+}
+
+window._syncPageToSentence = (el) => {
   const audio = getAudioElement();
   if (!audio || audio.paused) return;
-  _snapToActive(false);  // instant during auto-follow; manual turns (which pause audio) still animate
+
+  const unverifiedIdx = _unverifiedSystemSentenceIdx(el);
+  if (unverifiedIdx >= 0) {
+    // Show the first unverified System card, then keep that page stable while
+    // approximate SMIL slices advance through its neighbouring short labels.
+    if (state._systemPageHold?.chapterIdx === state.currentChapterIdx) return;
+    state._systemPageHold = { chapterIdx: state.currentChapterIdx, startIdx: unverifiedIdx };
+    _snapToActive(false, el);
+    return;
+  }
+
+  // A normal or ASR-confirmed System sentence releases the temporary hold.
+  state._systemPageHold = null;
+  _snapToActive(false, el);  // only reads immutable word→page data while audio plays
 };
 
 // ── DOM init ──────────────────────────────────────────────────────────────────
@@ -1401,6 +1500,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const ro = new ResizeObserver(debounce(() => {
     updatePlayerHeightVar();
     if (state.mode === 'reading') {
+      _indexWordPages();
       _snapToActive(false);  // pageStride is recomputed live from clientWidth
     }
   }, 150));

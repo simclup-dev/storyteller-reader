@@ -34,6 +34,7 @@ const state = {
   _walkAnimDur: DEFAULT_ANIM_DUR,
   _accentName: 'auto',
   speedIdx: DEFAULT_SPEED_IDX,
+  volume: 1,
   fallbackTried: false,
   fallbackChapterIdx: -1,
   mode: DEFAULT_MODE,
@@ -51,6 +52,7 @@ const state = {
   wordTimeline: null,
   wordTimelineLoaded: false,
   timelineReady: false,
+  _systemPageHold: null,
   _prefetching: false,
   wakeLock: null,
   _searchQuery: '',
@@ -127,6 +129,7 @@ export function resetState() {
     wordTimeline: null,
     wordTimelineLoaded: false,
     timelineReady: false,
+    _systemPageHold: null,
     _prefetching: false,
     wakeLock: null,
     _searchQuery: '',
@@ -155,6 +158,7 @@ export function resetPlayer() {
     wordTimeline: null,
     wordTimelineLoaded: false,
     timelineReady: false,
+    _systemPageHold: null,
     blockNextSentenceTap: false,
     _resumeProgress: null
   };

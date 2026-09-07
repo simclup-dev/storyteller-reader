@@ -3,6 +3,12 @@
 
 export const SPEEDS = [0.75, 0.80, 0.85, 0.90, 0.95, 1.0, 1.1, 1.25, 1.5, 2.0];
 export const EPUB_CACHE_VERSION = 10;
+// Audio blobs must be invalidated independently of EPUB parsing.  The cache
+// used to store a bare Blob by EPUB chapter index, so a corrected chapter map
+// could still replay the old file from IndexedDB.
+// v2: purge blobs fetched while the server-side transcoding cache contained
+// colliding alignment artifacts (a short intro under a chapter cache key).
+export const AUDIO_CACHE_VERSION = 2;
 
 // Default settings
 export const DEFAULT_FONT_SIZE = 21;
@@ -58,6 +64,7 @@ export const STORAGE_KEYS = {
   DENSITY: 'st_density',
   RADIUS: 'st_radius',
   ANIM_DUR: 'st_animdur',
+  VOLUME: 'st_volume',
 };
 
 // API endpoints template

@@ -319,6 +319,26 @@ export function setSpeedFromSlider(val) {
   localStorage.setItem(STORAGE_KEYS.SPEED, state.speedIdx);
 }
 
+/** Set the reader's own media volume without changing system volume. */
+export function setReaderVolume(value) {
+  const volume = Math.max(0, Math.min(1, Number(value)));
+  state.volume = Number.isFinite(volume) ? volume : 1;
+  const audio = getAudioElement();
+  if (audio) audio.volume = state.volume;
+  try { localStorage.setItem(STORAGE_KEYS.VOLUME, String(state.volume)); } catch (_) {}
+  _syncReaderVolumeControls();
+}
+
+function _syncReaderVolumeControls() {
+  const percent = Math.round((state.volume ?? 1) * 100);
+  const quick = document.getElementById('volume-quick');
+  if (quick) quick.value = String(percent);
+  const slider = document.getElementById('volume-slider');
+  if (slider) slider.value = String(state.volume ?? 1);
+  const label = document.getElementById('volume-display');
+  if (label) label.textContent = percent + '%';
+}
+
 /**
  * Update speed button display
  */
@@ -678,10 +698,25 @@ export function initNewControls() {
   _syncSeg('system-chime-seg', String(chime));
 
   // Арт розділу
-  const art = parseInt(localStorage.getItem('st_chapter_art')) || 0;
+  let art = parseInt(localStorage.getItem('st_chapter_art')) || 0;
+  // Old mode 2 displayed the generic cover as a splash on every chapter.
+  // Keep a quiet background for people who chose it, but stop the interruption.
+  if (art === 2 && localStorage.getItem('st_art_splash_migrated_v1') !== '1') {
+    art = 1;
+    localStorage.setItem('st_chapter_art', '1');
+    localStorage.setItem('st_art_splash_migrated_v1', '1');
+  }
   state.chapterArt = art;
   document.body.classList.toggle('chapter-art-on', art > 0);
   _syncSeg('chapter-art-seg', String(art));
+
+  // Reader volume — independent from the operating-system volume.
+  const savedVolume = localStorage.getItem(STORAGE_KEYS.VOLUME);
+  setReaderVolume(savedVolume === null ? 1 : savedVolume);
+  const volumeSlider = document.getElementById('volume-slider');
+  if (volumeSlider) volumeSlider.oninput = (e) => setReaderVolume(e.target.value);
+  const quickVolume = document.getElementById('volume-quick');
+  if (quickVolume) quickVolume.oninput = (e) => setReaderVolume(Number(e.target.value) / 100);
 
   // Art opacity
   const storedArtOpacity = localStorage.getItem('st_art_opacity');

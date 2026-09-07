@@ -129,6 +129,15 @@ export async function parseEpub(blob) {
       const readingHtml = doc.body.innerHTML;
 
       const sentences = [];
+      // SMIL fragments are often spans inside one visible paragraph. Keep that
+      // boundary so a damaged quote cannot colour unrelated narration.
+      const containerKeys = new Map();
+      let nextContainerKey = 0;
+      const getContainerKey = (el) => {
+        const container = el.closest('p, li, blockquote, h1, h2, h3, h4') || el.parentElement || el;
+        if (!containerKeys.has(container)) containerKeys.set(container, `c${nextContainerKey++}`);
+        return containerKeys.get(container);
+      };
 
       // First try: elements with ID matching SMIL
       doc.querySelectorAll('[id]').forEach(el => {
@@ -145,7 +154,9 @@ export async function parseEpub(blob) {
           clipBegin: smil.clipBegin,
           clipEnd: smil.clipEnd,
           elId: id,
-          _isSystem: isSystem
+          _isSystem: isSystem,
+          _containerKey: getContainerKey(el),
+          _file: smil.file
         });
       });
 
@@ -164,10 +175,44 @@ export async function parseEpub(blob) {
               clipBegin: smil.clipBegin,
               clipEnd: smil.clipEnd,
               elId: id,
-              _isSystem: isSystem
+              _isSystem: isSystem,
+              _containerKey: getContainerKey(el),
+              _file: smil.file
             });
           }
         });
+      }
+
+      // Alignment artifact guard: the aligner occasionally attributes a sentence
+      // at a chapter boundary to the ADJACENT audio file (e.g. the narrator's
+      // "Chapter N+1" lead-in bleeding a fraction of a second into the next
+      // file). Those stray sentences carry clip times from a DIFFERENT file
+      // than the rest of the chapter, which corrupts chapter duration
+      // (computed from the last sentence's clipEnd) and breaks the monotonic
+      // clipBegin ordering audio.js relies on for highlighting. Trim any such
+      // sentences off both ends so duration/highlighting always reflect the
+      // audio file this chapter actually plays (audioEpubFile).
+      while (sentences.length > 1 && sentences[sentences.length - 1]._file !== audioEpubFile) {
+        sentences.pop();
+      }
+      while (sentences.length > 1 && sentences[0]._file !== audioEpubFile) {
+        sentences.shift();
+      }
+
+      // Media overlays are external source data. Keep the original DOM order
+      // for rendering, but record invalid temporal ordering so runtime can use
+      // its corruption-safe lookup instead of relying on a binary search.
+      const timingIssues = [];
+      for (let i = 0; i < sentences.length; i++) {
+        const current = sentences[i];
+        if (!Number.isFinite(current.clipBegin) || !Number.isFinite(current.clipEnd) || current.clipEnd <= current.clipBegin) {
+          timingIssues.push({ index: i, kind: 'invalid-range', elId: current.elId });
+        } else if (i > 0 && current.clipBegin < sentences[i - 1].clipBegin - 0.001) {
+          timingIssues.push({ index: i, kind: 'non-monotonic', elId: current.elId, previousElId: sentences[i - 1].elId });
+        }
+      }
+      if (timingIssues.length) {
+        console.warn('[SMIL integrity]', item.href, timingIssues);
       }
 
       // TEMP DIAGNOSTIC — remove after Book 5 investigation
@@ -192,6 +237,7 @@ export async function parseEpub(blob) {
         audioEpubFile,
         sentences,
         duration: sentences[sentences.length - 1].clipEnd,
+        timingIssues,
         readingHtml
       });
       state.chapters.push({
@@ -228,15 +274,14 @@ export function parseSmil(smilText) {
     const fragId = src.includes('#') ? src.split('#')[1] : '';
     if (!fragId) return;
 
-    if (!audioEpubFile) {
-      const rawSrc = audioEl.getAttribute('src') || '';
-      audioEpubFile = rawSrc.split('/').pop().split('?')[0];
-    }
+    const rawSrc = audioEl.getAttribute('src') || '';
+    const file = rawSrc.split('/').pop().split('?')[0];
+    if (!audioEpubFile) audioEpubFile = file;
 
     const clipBegin = parseTime(audioEl.getAttribute('clipBegin') || audioEl.getAttribute('clip-begin') || '0');
     const clipEnd = parseTime(audioEl.getAttribute('clipEnd') || audioEl.getAttribute('clip-end') || '0');
 
-    smilMap[fragId] = { clipBegin, clipEnd };
+    smilMap[fragId] = { clipBegin, clipEnd, file };
   });
 
   return { smilMap, audioEpubFile };
@@ -262,31 +307,62 @@ export function parseTime(t) {
 }
 
 /**
- * Match EPUB chapters to audio chapters by duration
+ * Match EPUB chapters to audio chapters from authoritative EPUB metadata.
+ * Never choose a chapter solely because its duration happens to be similar:
+ * that can play a real, but completely different, chapter.
  */
 export function matchEpubChaptersToAudio() {
-  for (const ec of state.epubChapters) {
-    const epubDur = ec.duration;
-    if (!epubDur) {
-      ec.audioChapterIdx = -1;
-      continue;
-    }
-    // Primary: duration match within 2s (original, backward-compatible)
-    let idx = state.audioChapters.findIndex(ac => Math.abs(ac.duration - epubDur) < 2.0);
+  // Build filename → manifest index map. ac.href can be "00001-00036.mp4" or
+  // "transcoded audio/00001-00036.mp4" — normalise to just the bare filename
+  // so it can be compared directly against SMIL's audioEpubFile.
+  const filenameToIdx = new Map();
+  const titleNumberToIdx = new Map();
+  state.audioChapters.forEach((ac, i) => {
+    const name = decodeURIComponent(ac.href).split('/').pop().split('?')[0];
+    if (name) filenameToIdx.set(name, i);
+    const number = audioTrackNumber(ac.title);
+    if (number == null) return;
+    // A numeric title is a valid fallback only when it identifies exactly one
+    // manifest track.  Mark duplicates unusable instead of guessing.
+    titleNumberToIdx.set(number, titleNumberToIdx.has(number) ? -1 : i);
+  });
 
-    // Fallback: match by audio filename (for books where duration differs > 2s,
-    // or single-file audiobooks where one file covers all chapters).
-    // Require epubDur > 10s to skip very short chapters.
-    // Normalize both sides with decodeURIComponent to handle URL-encoded filenames
-    // in the audio manifest (e.g. "The%20Butcher%27s..." vs "The Butcher's...").
-    if (idx < 0 && ec.audioEpubFile && epubDur > 10) {
-      const epubFile = decodeURIComponent(ec.audioEpubFile);
-      idx = state.audioChapters.findIndex(ac =>
-        decodeURIComponent(ac.audioFile) === epubFile
-      );
+  for (const ec of state.epubChapters) {
+    let idx = -1;
+
+    // Primary: match by filename from SMIL overlay (EPUB is the ground truth).
+    // The SMIL says exactly which audio file each text chapter maps to — far
+    // more reliable than duration matching. Bug that was here before: code used
+    // ac.audioFile (undefined) instead of ac.href, so this always missed.
+    if (ec.audioEpubFile) {
+      const name = decodeURIComponent(ec.audioEpubFile).split('/').pop().split('?')[0];
+      if (name && filenameToIdx.has(name)) idx = filenameToIdx.get(name);
+      // Some transcoders number a single source as 00001-00008.mp4 while the
+      // audiobook manifest names the same track 00007-00001.mp4 (title 008).
+      // The SMIL track number and unique manifest title are still an exact,
+      // semantic match; duration is not.
+      if (idx < 0) {
+        const number = audioTrackNumber(name);
+        const byTitle = number == null ? -1 : titleNumberToIdx.get(number);
+        if (Number.isInteger(byTitle) && byTitle >= 0) idx = byTitle;
+      }
     }
 
     ec.audioChapterIdx = idx;
-    ec.primaryHref = idx >= 0 ? state.audioChapters[idx].href : null;
+    // primaryHref is reserved for an explicit, verified repair.  A normal
+    // mapping must always play the manifest href selected above.
+    ec.primaryHref = null;
   }
+  // TEMP DIAG — save mapping to localStorage for inspection
+  try {
+    const map = state.epubChapters.map((ec, i) => `${i}:${ec.audioChapterIdx}(${ec.duration?.toFixed(0)})`).join(' ');
+    localStorage.setItem('_diag_ch_map', map);
+    console.log('[matchEpubChaptersToAudio]', map);
+  } catch(_) {}
+}
+
+function audioTrackNumber(value) {
+  const stem = String(value || '').replace(/\.[^.]+$/, '');
+  const match = stem.match(/(\d+)(?!.*\d)/);
+  return match ? Number(match[1]) : null;
 }

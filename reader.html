@@ -646,12 +646,12 @@ body.chapter-art-on #text-content {
   --system-font-style: normal;
   --system-text-shadow: none;
 }
-.text-sentence.dialogue {
+.text-sentence.dialogue, .text-sentence .word.dialogue {
   font-family: var(--serif);
   font-style: var(--dialogue-font-style, italic);
   color: var(--dialogue-color);
 }
-.text-sentence.past.dialogue { color: var(--faint); }
+.text-sentence.past.dialogue, .text-sentence.past .word.dialogue { color: var(--faint); }
 /* System text (LitRPG status boxes, announcements) */
 .text-sentence.system {
   color: var(--system-color);
@@ -973,6 +973,8 @@ body.theme-switching { animation: themeFade 0.35s ease; }
 .controls-left {
   width: 160px; display: flex; align-items: center; gap: 8px;
 }
+.volume-quick { display:flex; align-items:center; gap:5px; color:var(--sub, var(--text-muted)); font-size:15px; }
+.volume-quick input { width:56px; accent-color:var(--accent); cursor:pointer; }
 .controls-center {
   display: flex; align-items: center; gap: 22px;
 }
@@ -2167,6 +2169,7 @@ body:has(.bottom-panel.open) #walk-controls { display: none !important; }
       <!-- Left: speed pill -->
       <div class="controls-left">
         <button id="speed-btn" aria-label="Швидкість">1.0× ▾</button>
+        <label class="volume-quick" title="Гучність читалки"><span aria-hidden="true">🔊</span><input id="volume-quick" type="range" min="0" max="100" step="1" value="100" aria-label="Гучність читалки"></label>
       </div>
 
       <!-- Center: ‹‹ Play ›› -->
@@ -2381,6 +2384,10 @@ body:has(.bottom-panel.open) #walk-controls { display: none !important; }
 
     <div class="settings-group">
       <div class="sgroup">Прогулянка</div>
+      <div class="srow">
+        <span class="settings-label">Гучність читалки: <strong id="volume-display">100%</strong></span>
+        <div class="cslider" id="volume-slider" data-min="0" data-max="1" data-step="0.05" data-value="1" style="width:150px;"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>
+      </div>
       <div class="srow">
         <span class="settings-label">Швидкість: <strong id="speed-display">1.0×</strong></span>
         <div class="cslider" id="speed-slider" data-min="0.5" data-max="2.0" data-step="0.05" data-value="1.0" style="width:150px;"><div class="cslider-track"><div class="cslider-fill"></div><div class="cslider-thumb"></div></div></div>

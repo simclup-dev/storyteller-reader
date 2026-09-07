@@ -2,7 +2,7 @@
 // Handles IndexedDB caching and progress persistence
 
 import { state, getAudioElement } from './state.js';
-import { CACHE_SETTINGS, EPUB_CACHE_VERSION } from './constants.js';
+import { AUDIO_CACHE_VERSION, CACHE_SETTINGS, EPUB_CACHE_VERSION } from './constants.js';
 import { saveProgressToServer as serverSaveProgress } from './http.js';
 
 let _db = null;
@@ -96,12 +96,12 @@ export async function getCachedEpub(bookId) {
  * @param {number} epubChIdx
  * @param {Blob} blob
  */
-export async function cacheAudio(bookId, epubChIdx, blob) {
+export async function cacheAudio(bookId, epubChIdx, blob, href, duration) {
   try {
     const db = await openDB();
     const tx = db.transaction('audio', 'readwrite');
     const store = tx.objectStore('audio');
-    store.put(blob, audioCacheKey(bookId, epubChIdx));
+    store.put({ blob, fingerprint: audioCacheFingerprint(href, duration) }, audioCacheKey(bookId, epubChIdx));
     await new Promise((resolve, reject) => {
       tx.oncomplete = resolve;
       tx.onerror = reject;
@@ -117,14 +117,24 @@ export async function cacheAudio(bookId, epubChIdx, blob) {
  * @param {number} epubChIdx
  * @returns {Promise<Blob|null>}
  */
-export async function getCachedAudio(bookId, epubChIdx) {
+export async function getCachedAudio(bookId, epubChIdx, href, duration) {
   try {
     const db = await openDB();
     const tx = db.transaction('audio', 'readonly');
     const store = tx.objectStore('audio');
     const req = store.get(audioCacheKey(bookId, epubChIdx));
     return new Promise((resolve, reject) => {
-      req.onsuccess = () => resolve(req.result || null);
+      req.onsuccess = () => {
+        const entry = req.result;
+        const fingerprint = audioCacheFingerprint(href, duration);
+        // Legacy entries are bare Blobs. They have no provenance and cannot be
+        // trusted after a map/manifest correction, so force a network refresh.
+        if (!entry || entry.fingerprint !== fingerprint || !(entry.blob instanceof Blob)) {
+          if (entry) void removeCachedAudio(bookId, epubChIdx);
+          return resolve(null);
+        }
+        resolve(entry.blob);
+      };
       req.onerror = reject;
     });
   } catch (e) {
@@ -145,6 +155,31 @@ export async function removeCachedAudio(bookId, epubChIdx) {
     await new Promise(r => tx.oncomplete = r);
   } catch (e) {
     console.warn(e);
+  }
+}
+
+/**
+ * One-time migration for the legacy audio cache.  Unlike EPUB entries, old
+ * audio Blobs contained neither their source href nor a manifest version.
+ */
+export async function invalidateAudioCacheIfNeeded() {
+  const key = 'audio_cache_version';
+  if (parseInt(localStorage.getItem(key), 10) === AUDIO_CACHE_VERSION) return false;
+  try {
+    const db = await openDB();
+    const tx = db.transaction('audio', 'readwrite');
+    tx.objectStore('audio').clear();
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    localStorage.setItem(key, String(AUDIO_CACHE_VERSION));
+    console.log('Audio cache invalidated — legacy blobs had no mapping provenance');
+    return true;
+  } catch (e) {
+    console.warn('Failed to invalidate audio cache', e);
+    return false;
   }
 }
 
@@ -199,7 +234,7 @@ export async function audioCacheSize(bookId) {
         const c = e.target.result;
         if (c) {
           if (c.key.toString().startsWith(bookId + '_ch')) {
-            total += c.value.size;
+            total += (c.value?.blob || c.value)?.size || 0;
           }
           c.continue();
         } else {
@@ -223,6 +258,12 @@ function audioCacheKey(bookId, epubChIdx) {
   return `${bookId}_ch${epubChIdx}`;
 }
 
+function audioCacheFingerprint(href, duration) {
+  const normalHref = String(href || '').split('?')[0];
+  const seconds = Number(duration || 0).toFixed(3);
+  return `${normalHref}|${seconds}`;
+}
+
 /**
  * Save current reading progress
  */
@@ -232,7 +273,14 @@ export function saveProgress(force = false) {
 
   const audio = getAudioElement();
   const ac = state.audioChapters[state.currentAudioChIdx];
-  const absTime = (ac && ac.startTime != null) ? (ac.startTime + audio.currentTime) : audio.currentTime;
+  // No chapter audio currently loaded (e.g. this chapter has no audio match) —
+  // there's no meaningful absolute book position to persist. audio.currentTime
+  // alone (without ac.startTime) is a per-file offset, not a book-wide one;
+  // writing it here would clobber the last known-good progress with a bogus
+  // near-zero value and win the "freshest wins" comparison on restore.
+  if (!ac || !audio) return;
+
+  const absTime = ac.startTime + audio.currentTime;
 
   const progressData = {
     absTime,
@@ -249,13 +297,11 @@ export function saveProgress(force = false) {
   }
 
   // Also save to server (throttled, unless forced)
-  if (ac) {
-    const now = Date.now();
-    if (force || !state._lastServerSave || now - state._lastServerSave > 10000) {
-      state._lastServerSave = now;
-      const currentHref = ac.href || '';
-      serverSaveProgress(state.bookId, absTime, state.totalDuration, currentHref);
-    }
+  const now = Date.now();
+  if (force || !state._lastServerSave || now - state._lastServerSave > 10000) {
+    state._lastServerSave = now;
+    const currentHref = ac.href || '';
+    serverSaveProgress(state.bookId, absTime, state.totalDuration, currentHref);
   }
 }
 
@@ -363,10 +409,13 @@ export async function getCacheSize() {
  * WARNING: removes all cached books. Always call behind a confirm().
  */
 export async function clearCache() {
-  // Close and drop all IndexedDB databases
+  // Drop media IndexedDB databases but NOT 'st-secure' — it holds the AES
+  // master key that decrypts the session token stored in localStorage.
+  // Deleting it destroys the key → token becomes unreadable → forced logout.
   _db = null;
   const dbs = await (indexedDB.databases?.() ?? Promise.resolve([]));
   await Promise.all(dbs.map(db => new Promise(res => {
+    if (db.name === 'st-secure') return res();
     const req = indexedDB.deleteDatabase(db.name);
     req.onsuccess = req.onerror = req.onblocked = () => res();
   })));

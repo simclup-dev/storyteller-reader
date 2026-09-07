@@ -214,8 +214,9 @@ export function loadAudioChapter(audioChIdx, startAt = 0, autoplay = false, epub
 
   audio.addEventListener('loadedmetadata', doSeekAndPlay, { once: true });
 
-  // Try cached audio first
-  getCachedAudio(state.bookId, state.currentChapterIdx).then(blob => {
+  // Try cached audio first (use epubChIdx parameter — state.currentChapterIdx may not be updated yet)
+  const cacheIdx = epubChIdx >= 0 ? epubChIdx : state.currentChapterIdx;
+  getCachedAudio(state.bookId, cacheIdx, href, ac.duration).then(blob => {
     if (blob) {
       audio._cacheUrl = URL.createObjectURL(blob);
       audio.src = audio._cacheUrl;
@@ -473,15 +474,32 @@ export function onTimeUpdate() {
   const sens = state.sentences;
   if (!sens.length) return;
 
-  // Binary search for current sentence
-  let lo = 0, hi = sens.length - 1, found = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (sens[mid].clipBegin <= t) {
-      found = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
+  // Do not assume that a third-party SMIL is sorted. A few real EPUBs contain
+  // a 0:00 fragment after a 30+ minute fragment; binary search then picks a
+  // future DOM block. Prefer the interval containing currentTime, falling back
+  // to the latest valid start before it. Chapters are small (< 1k fragments),
+  // so this is cheap at native `timeupdate` frequency and correct for both
+  // clean and damaged source files.
+  let found = -1;
+  let latestStart = -Infinity;
+  for (let i = 0; i < sens.length; i++) {
+    const begin = Number(sens[i].clipBegin);
+    const end = Number(sens[i].clipEnd);
+    if (!Number.isFinite(begin) || !Number.isFinite(end) || end <= begin) continue;
+    if (begin <= t && t < end) {
+      if (begin > latestStart) {
+        found = i;
+        latestStart = begin;
+      }
+    }
+  }
+  if (found < 0) {
+    for (let i = 0; i < sens.length; i++) {
+      const begin = Number(sens[i].clipBegin);
+      if (Number.isFinite(begin) && begin <= t && begin > latestStart) {
+        found = i;
+        latestStart = begin;
+      }
     }
   }
 
@@ -682,82 +700,10 @@ async function attemptUniversalFallback(epubChIdx, startAt, autoplay) {
   const ec = state.epubChapters[epubChIdx];
   if (!ac || !ec) return;
 
-  if (ec.primaryHref) { ec.primaryHref = null; }
-  const candidates = [];
-  if (ec.audioEpubFile) candidates.push(ec.audioEpubFile);
-  const m = ec.audioEpubFile?.match(/(\d+)-(\d+)\.mp4$/i);
-  if (m) candidates.push(m[2] + '-' + m[1] + '.mp4');
-  for (const chapter of state.audioChapters) {
-    if (Math.abs(chapter.duration - ec.duration) < 2.0) {
-      const candidateFile = chapter.href.split('/').pop().split('?')[0];
-      if (!candidates.includes(candidateFile)) candidates.push(candidateFile);
-    }
-  }
-  const prefixMatch = ec.audioEpubFile?.match(/^(\d+-)/);
-  if (prefixMatch) {
-    const prefix = prefixMatch[1];
-    for (let i = 1; i <= 10; i++) {
-      const fname = prefix + String(i).padStart(5, '0') + '.mp4';
-      if (!candidates.includes(fname)) candidates.push(fname);
-    }
-  }
-
-  for (const fname of candidates) {
-    const testUrl = getAudioUrl(state.bookId, fname);
-    try {
-      const headRes = await fetch(testUrl, { method: 'HEAD', headers: authHdr() });
-      if (!headRes.ok) continue;
-      const size = parseInt(headRes.headers.get('content-length') || '0');
-      const expectedSize = ec.duration * 16000;
-      const sizeRatio = size / expectedSize;
-      if (sizeRatio > 0.7 && sizeRatio < 1.3 && size > 1000000) {
-        ec.primaryHref = fname;
-        ++_chapterLoadCounter;
-        state.wordTimeline = null;
-        state.wordTimelineLoaded = false;
-        state.timelineReady = false;
-        if (state.assetFolder) {
-          loadTranscription(state.assetFolder, fname).then(data => {
-            if (!data?.timeline) return;
-            state.wordTimeline = data.timeline.filter(t => t.type === 'word');
-            if (state.wordTimeline.length > 20) {
-              state.wordTimelineLoaded = true;
-            }
-            state.timelineReady = true;
-          }).catch(() => {});
-        }
-        audio.src = testUrl;
-        audio.load();
-        await new Promise((resolve, reject) => {
-          const onMeta = () => {
-            audio.removeEventListener('loadedmetadata', onMeta);
-            audio.playbackRate = SPEEDS[state.speedIdx];
-            if (audio.duration > ec.duration * 0.5) resolve();
-            else reject(new Error('short'));
-          };
-          audio.addEventListener('loadedmetadata', onMeta, { once: true });
-          audio.addEventListener('error', () => reject(new Error('error')), { once: true });
-        });
-        if (startAt > 0) audio.currentTime = startAt;
-        if (audio._endedHandler) {
-          audio.removeEventListener('ended', audio._endedHandler);
-          audio._endedHandler = null;
-        }
-        audio._endedHandler = () => { audio._endedHandler = null; _handleChapterEnded(); };
-        audio.addEventListener('ended', audio._endedHandler, { once: true });
-        if (autoplay || !audio.paused) {
-          audio.play().catch(e => {
-            if (e.name === 'NotAllowedError') showToast('⚠️ Натисніть Play, щоб почати');
-          });
-        }
-        return;
-      }
-    } catch(e) {
-      console.warn(e);
-    }
-  }
-
-  // Fallback: use original href
+  // A duration/size heuristic can find a valid but unrelated chapter (the
+  // Book 3 Chapter 7 → Chapter 13 regression).  Reset only to the manifest
+  // source selected by the deterministic EPUB/SMIL map; never guess.
+  ec.primaryHref = null;
   const origHref = state.audioChapters[ec.audioChapterIdx].href;
   audio.src = getAudioUrl(state.bookId, origHref);
   audio.load();
